@@ -64,20 +64,20 @@ def run_inference(
             
             # Get model response with retries
             txt = call_with_retries(client, prompt, retries=3, backoff=0.8)
-            
-            # Try to extract number from response
+
+            # Validate & extract
             number_str, _ = coerce_to_fixed_decimals(txt, 6)
-            
-            # Store results
-            raw_text[i] = txt
-            final_line[i] = force_final_line(number_str, 6)
-            
-            if number_str is not None:
-                try:
-                    y_hat[i] = float(number_str)
-                except (ValueError, TypeError):
-                    y_hat[i] = math.nan
-                    print(f"Warning: Could not convert '{number_str}' to float for row {i}")
+            if number_str is None:
+                # one more synchronous attempt here (optional but helps transient hiccups)
+                txt = call_with_retries(client, prompt, retries=1, backoff=1.2)
+                number_str, _ = coerce_to_fixed_decimals(txt, 6)
+
+            # If still invalid, mark as error for this row
+            if number_str is None:
+                raw_text[i] = txt or "ERROR: invalid format"
+                final_line[i] = "ERROR"
+                y_hat[i] = math.nan
+                return  # don't sleep here; worker is done
         except Exception as e:
             print(f"Error processing row {i}: {str(e)}")
             # Store error information
