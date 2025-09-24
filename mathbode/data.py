@@ -16,8 +16,11 @@ def load_mathbode(families:List[str], max_rows:Optional[int]=None)->pd.DataFrame
     if max_rows: full=full.head(max_rows)
     return full
 
-def stratified_subset(df:pd.DataFrame, frequencies:List[int], phases:List[int], max_sweeps_per_freq:int)->pd.DataFrame:
-    import numpy as np
+def stratified_subset(df: pd.DataFrame, frequencies: List[int], phases: List[int], max_sweeps_per_freq: int) -> pd.DataFrame:
+    """
+    Get a stratified subset of the dataset based on frequencies and phases.
+    Makes amplitude_scale optional to handle datasets that don't have it.
+    """
     # Filter first
     df = df[df["frequency_cycles"].isin(frequencies)]
     df = df[df["phase_deg"].isin(phases)]
@@ -26,16 +29,24 @@ def stratified_subset(df:pd.DataFrame, frequencies:List[int], phases:List[int], 
     df = df.reset_index(drop=True)
     
     keep_idx = []
-    for (fam, freq), g in df.groupby(["family","frequency_cycles"]):
+    for (fam, freq), g in df.groupby(["family", "frequency_cycles"]):
         # Reset index again for the group to ensure proper indexing
         g = g.reset_index(drop=True)
-        keys = g[["question_id", "phase_deg", "amplitude_scale"]].drop_duplicates()
+        
+        # Use amplitude_scale if it exists, otherwise don't include it in the merge
+        merge_keys = ["question_id", "phase_deg"]
+        if "amplitude_scale" in g.columns:
+            merge_keys.append("amplitude_scale")
+            
+        keys = g[merge_keys].drop_duplicates()
         if len(keys) == 0:
             continue
             
+        # Sample up to max_sweeps_per_freq
         keys = keys.sample(n=min(max_sweeps_per_freq, len(keys)), random_state=42)
-        # Use indicator=True to see which rows are being kept
-        merged = g.merge(keys, on=["question_id", "phase_deg", "amplitude_scale"], how="inner")
+        
+        # Merge back to get all rows for the selected keys
+        merged = g.merge(keys, on=merge_keys, how="inner")
         keep_idx.extend(merged.index.tolist())
     
     if not keep_idx:

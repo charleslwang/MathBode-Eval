@@ -9,19 +9,15 @@ from .utils import build_prompt, call_with_retries, coerce_to_fixed_decimals, fo
 def _load_existing(pred_path:str)->Optional[pd.DataFrame]:
     return pd.read_parquet(pred_path) if os.path.exists(pred_path) else None
 
-def _merge_and_save(base:pd.DataFrame, new_rows:pd.DataFrame, pred_path:str):
-    if base is None:
-        out=new_rows
+def _merge_and_save(base: Optional[pd.DataFrame], new_rows: pd.DataFrame, pred_path: str):
+    if base is None or base.empty:
+        out = new_rows
     else:
-        # outer-join on row_id and prefer new non-null fields
-        out=(base.set_index("row_id")
-                .combine_first(new_rows.set_index("row_id"))
-                .reset_index())
-        # If both have values, keep the latest non-empty final_line/raw_text/y_hat
-        for col in ["raw_text","final_line","y_hat"]:
-            if col in new_rows.columns:
-                out[col]=out[col+"_x"].where(out[col+"_y"].isna(), out[col+"_y"])
-                out=out.drop(columns=[c for c in out.columns if c.endswith("_x") or c.endswith("_y")], errors="ignore")
+        out = (
+            new_rows.set_index("row_id")
+                   .combine_first(base.set_index("row_id"))  # prefer new non-null
+                   .reset_index()
+        )
     out.to_parquet(pred_path, index=False)
 
 def run_inference(
@@ -61,24 +57,37 @@ def run_inference(
     raw_text=[None]*len(rows); final_line=[None]*len(rows); y_hat=[math.nan]*len(rows)
 
     def work(i):
-        r=rows[i]
-        prompt=build_prompt(r["prompt"])
-        txt=call_with_retries(client, prompt, retries=3, backoff=0.8)
-        number_str=None
-        # OpenAI JSON mode: parse {"final": "..."} if present
-        if provider.lower()=="openai" and txt.strip().startswith("{"):
-            try:
-                j=json.loads(txt); number_str,_=coerce_to_fixed_decimals(j.get("final",""),6)
-            except Exception:
-                pass
-        if number_str is None:
-            number_str,_=coerce_to_fixed_decimals(txt,6)
-        raw_text[i]=txt
-        final_line[i]=force_final_line(number_str,6)
-        if number_str is not None:
-            y_hat[i]=float(number_str)
-        if provider_rps>0:
-            import time; time.sleep(1.0/provider_rps)
+        r = rows[i]
+        try:
+            # Build prompt with standardized format instructions
+            prompt = build_prompt(r["prompt"])
+            
+            # Get model response with retries
+            txt = call_with_retries(client, prompt, retries=3, backoff=0.8)
+            
+            # Try to extract number from response
+            number_str, _ = coerce_to_fixed_decimals(txt, 6)
+            
+            # Store results
+            raw_text[i] = txt
+            final_line[i] = force_final_line(number_str, 6)
+            
+            if number_str is not None:
+                try:
+                    y_hat[i] = float(number_str)
+                except (ValueError, TypeError):
+                    y_hat[i] = math.nan
+                    print(f"Warning: Could not convert '{number_str}' to float for row {i}")
+        except Exception as e:
+            print(f"Error processing row {i}: {str(e)}")
+            # Store error information
+            raw_text[i] = f"ERROR: {str(e)}"
+            final_line[i] = "ERROR"
+            y_hat[i] = math.nan
+        
+        # Rate limiting
+        if provider_rps > 0:
+            import time; time.sleep(1.0 / provider_rps)
 
     from tqdm import tqdm
     import time
