@@ -1,6 +1,8 @@
 {
-    "gemini":    ["gemini-2.5-pro"],
-    "openai":    ["gpt-5"],
-    "anthropic": ["claude-sonnet-4-20250514"]
-  }
-  
+  "gemini":    [],
+  "openai":    [],
+  "anthropic": [],
+  "together":  [
+      "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"
+  ]
+}
