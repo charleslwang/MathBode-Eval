@@ -2,85 +2,180 @@
 import math
 import numpy as np
 import pandas as pd
+from typing import Dict, Optional, Tuple, List
 
-def fit_sin_cos(t, y, omega):
-    t=np.asarray(t,dtype=float); y=np.asarray(y,dtype=float)
-    X=np.c_[np.ones_like(t), np.sin(omega*t), np.cos(omega*t)]
-    mask=np.isfinite(y); X,y=X[mask],y[mask]
-    if len(y)<16: return None
-    beta,*_=np.linalg.lstsq(X,y,rcond=None)
-    b0,bs,bc=beta
-    A=math.hypot(bs,bc)
-    phi=math.atan2(bc,bs)
-    yhat=X@beta
-    ss_res=float(np.sum((y-yhat)**2))
-    ss_tot=float(np.sum((y-np.mean(y))**2)) or 1.0
-    r2=1.0 - ss_res/ss_tot
-    return dict(A=A,phi=phi,r2=r2)
+# ---------- Core helpers ----------
 
-def wrap_pi(x): return (x+math.pi)%(2*math.pi)-math.pi
+def wrap_pi(x: float) -> float:
+    """Wrap angle to (-pi, pi]."""
+    return (x + math.pi) % (2 * math.pi) - math.pi
 
-def get_steps_per_sweep(time_steps):
-    """Detect steps_per_sweep from time_steps by finding the period of the most common difference."""
-    if len(time_steps) < 2:
-        return 1
-    diffs = np.diff(np.sort(time_steps))
-    if len(diffs) == 0:
-        return 1
-    # Find the most common non-zero difference
-    unique, counts = np.unique(diffs, return_counts=True)
-    if len(unique) == 0:
-        return 1
-    most_common_diff = unique[counts.argmax()]
-    if most_common_diff <= 0:
-        return 1
-    # Calculate steps_per_sweep as the period
-    steps_per_sweep = 1.0 / (most_common_diff * 1e-9)  # Convert ns to seconds
-    return max(1, int(round(steps_per_sweep)))
+def _fit_sin_cos(t: np.ndarray, y: np.ndarray, omega: float) -> Optional[Dict[str, float]]:
+    """
+    OLS fit onto [1, sin(ωt), cos(ωt)]; returns amplitude A, phase phi, and R^2.
+    Requires at least ~16 valid points.
+    """
+    t = np.asarray(t, dtype=float)
+    y = np.asarray(y, dtype=float)
+    mask = np.isfinite(y)
+    if mask.sum() < 16:
+        return None
+    X = np.c_[np.ones(mask.sum()), np.sin(omega * t[mask]), np.cos(omega * t[mask])]
+    beta, *_ = np.linalg.lstsq(X, y[mask], rcond=None)
+    b0, bs, bc = map(float, beta)
+    A = math.hypot(bs, bc)
+    phi = math.atan2(bc, bs)
+    yhat = X @ beta
+    ss_res = float(np.sum((y[mask] - yhat) ** 2))
+    ss_tot = float(np.sum((y[mask] - np.mean(y[mask])) ** 2)) or 1.0
+    r2 = 1.0 - ss_res / ss_tot
+    return dict(A=A, phi=phi, r2=r2)
 
-# summarize.py
-STEPS_PER_SWEEP = 256  # MathBode convention
+def _detect_T(time_steps: np.ndarray) -> int:
+    """
+    Detect steps per sweep T from a group's time_step values.
+    Assumes each (freq, phase) subgroup has the same count; use the modal count.
+    """
+    ts = np.asarray(time_steps)
+    # Count unique steps per (freq, phase) inside the group after we split by them.
+    # Here, caller ensures we pass a single (freq,phase) slice or provides per-slice counts.
+    # As a fallback, use number of unique time steps in this array.
+    return int(pd.Series(ts).nunique())
 
-def summarize_gain_phase(preds: pd.DataFrame) -> pd.DataFrame:
-    rows=[]
-    for fam, g1 in preds.groupby("family"):
-        for freq, g2 in g1.groupby("frequency_cycles"):
-            t_truth=[]; y_truth=[]; y_model=[]
+def _to_float(arr: pd.Series) -> np.ndarray:
+    """Best-effort numeric conversion; non-parsable -> NaN."""
+    # If y_hat already numeric, astype will be fast; otherwise coerce
+    try:
+        return arr.astype(float).to_numpy()
+    except Exception:
+        return pd.to_numeric(arr, errors="coerce").to_numpy()
 
-            # NOTE: amplitude_scale may be absent in some families → groupby keys must be dynamic
-            group_keys = ["question_id", "phase_deg"] + (["amplitude_scale"] if "amplitude_scale" in g2.columns else [])
-            for _, sweep in g2.groupby(group_keys):
-                s = sweep.sort_values("time_step")
-                t_truth.append(s["time_step"].to_numpy())
-                y_truth.append(s["ground_truth"].to_numpy(dtype=float))
-                y_model.append(s["y_hat"].to_numpy(dtype=float))
+# ---------- Public API ----------
 
-            if not t_truth: 
-                continue
-            t_truth = np.concatenate(t_truth)
-            y_truth = np.concatenate(y_truth)
-            y_model = np.concatenate(y_model)
-            if len(y_truth) < 32 or len(y_model) < 32: 
-                continue
+def summarize_gain_phase_all(preds: pd.DataFrame) -> pd.DataFrame:
+    """
+    Return ALL results, one row per (family, frequency_cycles, question_id, amplitude_scale?, phase_deg).
+    Columns:
+      family, frequency_cycles, phase_deg, question_id, amplitude_scale (if present),
+      gain, phase_deg, A_truth, A_model, r2_truth, r2_model,
+      n_total, n_valid, compliance_rate, steps_per_sweep
+    """
+    need = {"family", "frequency_cycles", "phase_deg", "time_step", "ground_truth", "y_hat", "question_id"}
+    missing = need - set(preds.columns)
+    if missing:
+        raise ValueError(f"summarize_gain_phase_all: preds missing columns: {sorted(missing)}")
 
-            omega = 2 * math.pi * int(freq) / STEPS_PER_SWEEP
+    df = preds.copy()
 
-            ft = fit_sin_cos(t_truth, y_truth, omega)
-            fm = fit_sin_cos(t_truth, y_model, omega)
-            if not ft or not fm: 
-                continue
+    # normalize dtypes
+    df["frequency_cycles"] = df["frequency_cycles"].astype(int)
+    df["phase_deg"] = df["phase_deg"].astype(int)
 
-            gain = fm["A"]/ft["A"] if ft["A"] > 0 else float("nan")
-            dphi = wrap_pi(fm["phi"] - ft["phi"])
-            rows.append({
-                "family": fam,
-                "frequency_cycles": int(freq),
-                "gain": gain,
-                "phase_deg": math.degrees(dphi),
-                "r2_truth": ft["r2"],
-                "r2_model": fm["r2"],
-                "A_truth": ft["A"],
-                "A_model": fm["A"],
-                "steps_per_sweep": STEPS_PER_SWEEP,
-            })
-    return pd.DataFrame(rows).sort_values(["family","frequency_cycles"])
+    has_amp = "amplitude_scale" in df.columns
+    group_cols = ["family", "frequency_cycles", "phase_deg", "question_id"] + (["amplitude_scale"] if has_amp else [])
+
+    rows: List[Dict] = []
+
+    # group per base key + phase + frequency
+    for keys, g in df.groupby(group_cols, dropna=False):
+        g = g.sort_values("time_step")
+        # detect T for this slice
+        T = _detect_T(g["time_step"].to_numpy())
+        if T < 8:
+            continue  # too short to fit meaningfully
+
+        freq = int(g["frequency_cycles"].iloc[0])
+        omega = 2 * math.pi * freq / T
+
+        t = g["time_step"].to_numpy()
+        y_true = _to_float(g["ground_truth"])
+        y_model = _to_float(g["y_hat"])
+
+        # compliance: valid numeric predictions (finite y_hat)
+        is_valid = np.isfinite(y_model)
+        n_total = int(len(y_model))
+        n_valid = int(np.count_nonzero(is_valid))
+        compliance_rate = (n_valid / n_total) if n_total > 0 else 0.0
+
+        ft = _fit_sin_cos(t, y_true, omega)
+        fm = _fit_sin_cos(t, y_model, omega)
+
+        # If the model series is too sparse, still record compliance but skip gain/phase
+        if not ft or not fm or ft["A"] <= 0:
+            out = dict(
+                family=keys[0],
+                frequency_cycles=freq,
+                phase_deg=keys[2],
+                question_id=keys[3 if not has_amp else 3],
+                gain=float("nan"),
+                phase_deg_model_minus_truth=float("nan"),
+                A_truth=float("nan") if not ft else ft["A"],
+                A_model=float("nan") if not fm else fm["A"],
+                r2_truth=float("nan") if not ft else ft["r2"],
+                r2_model=float("nan") if not fm else fm["r2"],
+                n_total=n_total,
+                n_valid=n_valid,
+                compliance_rate=compliance_rate,
+                steps_per_sweep=T,
+            )
+            if has_amp:
+                out["amplitude_scale"] = keys[4]
+            rows.append(out)
+            continue
+
+        gain = fm["A"] / ft["A"]
+        dphi = wrap_pi(fm["phi"] - ft["phi"])
+
+        out = dict(
+            family=keys[0],
+            frequency_cycles=freq,
+            phase_deg=keys[2],
+            question_id=keys[3 if not has_amp else 3],
+            gain=gain,
+            phase_deg_model_minus_truth=math.degrees(dphi),
+            A_truth=ft["A"],
+            A_model=fm["A"],
+            r2_truth=ft["r2"],
+            r2_model=fm["r2"],
+            n_total=n_total,
+            n_valid=n_valid,
+            compliance_rate=compliance_rate,
+            steps_per_sweep=T,
+        )
+        if has_amp:
+            out["amplitude_scale"] = keys[4]
+        rows.append(out)
+
+    cols = [
+        "family", "frequency_cycles", "phase_deg", "question_id"
+    ] + (["amplitude_scale"] if has_amp else []) + [
+        "gain", "phase_deg_model_minus_truth",
+        "A_truth", "A_model", "r2_truth", "r2_model",
+        "n_total", "n_valid", "compliance_rate",
+        "steps_per_sweep",
+    ]
+    res = pd.DataFrame(rows)[cols].sort_values(
+        ["family", "question_id"] + (["amplitude_scale"] if has_amp else []) + ["frequency_cycles", "phase_deg"]
+    )
+    return res
+
+def summarize_gain_phase_means(all_rows: pd.DataFrame) -> pd.DataFrame:
+    """
+    Roll up per-(family, frequency) means (for error bands / quick curves),
+    given the detailed output of summarize_gain_phase_all.
+    """
+    df = all_rows.copy()
+    # harmonize column name for plotting compatibility
+    if "phase_deg_model_minus_truth" in df.columns:
+        df = df.rename(columns={"phase_deg_model_minus_truth": "phase_deg"})
+    by = ["family", "frequency_cycles"]
+    agg = {
+        "gain": "mean",
+        "phase_deg": "mean",
+        "r2_model": "mean",
+        "A_truth": "mean",
+        "A_model": "mean",
+        "compliance_rate": "mean",
+    }
+    out = df.groupby(by, dropna=False).agg(agg).reset_index()
+    return out.sort_values(by)

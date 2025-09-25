@@ -99,6 +99,33 @@ def run_inference(
     
     print(f"🚀 Starting inference with {workers} workers for {total_requests} requests...")
     
+    # Save results in batches of 100 or 1 minute, whichever comes first
+    BATCH_SIZE = 100
+    last_save_time = time.time()
+    results_since_last_save = 0
+    completed_indices = set()
+    
+    def save_checkpoint():
+        nonlocal results_since_last_save, last_save_time
+        if not results_since_last_save:
+            return
+            
+        # Get all completed results so far
+        completed_mask = [i in completed_indices for i in range(len(rows))]
+        part = todo[completed_mask].copy()
+        part["raw_text"] = [raw_text[i] for i in range(len(rows)) if i in completed_indices]
+        part["final_line"] = [final_line[i] for i in range(len(rows)) if i in completed_indices]
+        part["y_hat"] = [y_hat[i] for i in range(len(rows)) if i in completed_indices]
+        
+        # Merge with existing and save
+        current = _load_existing(pred_path)
+        _merge_and_save(current, part, pred_path)
+        print(f"\n💾 Checkpoint: Saved {results_since_last_save} results to {pred_path}")
+        
+        # Reset counters
+        results_since_last_save = 0
+        last_save_time = time.time()
+    
     with ThreadPoolExecutor(max_workers=workers) as ex:
         # Submit all tasks
         futs = {ex.submit(work, i): i for i in range(len(rows))}
@@ -107,6 +134,8 @@ def run_inference(
         with tqdm(total=total_requests, desc=f"Inferring ({provider}/{model})", unit='req') as pbar:
             for future in as_completed(futs):
                 completed_requests += 1
+                results_since_last_save += 1
+                completed_indices.add(futs[future])
                 pbar.update(1)
                 
                 # Calculate and display ETA and rate
@@ -132,14 +161,24 @@ def run_inference(
                     future.result()  # This will raise any exceptions from the worker
                 except Exception as e:
                     print(f"\n⚠️ Error in worker for row {futs[future]}: {str(e)}")
+                    # Save progress before re-raising
+                    save_checkpoint()
                     raise
+                
+                # Periodically save checkpoints
+                current_time = time.time()
+                if (results_since_last_save >= BATCH_SIZE or 
+                    (current_time - last_save_time) >= 60):  # Save every minute or BATCH_SIZE, whichever comes first
+                    save_checkpoint()
 
-    part=todo.copy()
-    part["raw_text"]=raw_text
-    part["final_line"]=final_line
-    part["y_hat"]=y_hat
-
-    _merge_and_save(existing, part, pred_path)
-    print(f"💾 Saved predictions → {pred_path}")
-    print(f"Requests OK/Total: {getattr(client,'ok',0)}/{getattr(client,'total',0)}; last_error={getattr(client,'last_error',None)}")
+    # Final save of any remaining results
+    save_checkpoint()
+    print(f"✅ Completed {completed_requests} requests")
+    print(f"Total OK/Total: {getattr(client,'ok',0)}/{getattr(client,'total',0)}; last_error={getattr(client,'last_error',None)}")
+    
+    # Load final results to verify counts
+    final = _load_existing(pred_path)
+    if final is not None:
+        valid = final["final_line"].notna() & (final["final_line"] != "")
+        print(f"Saved {valid.sum()}/{len(final)} valid results in {pred_path}")
     return pred_path
