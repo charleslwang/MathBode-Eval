@@ -2,6 +2,7 @@
 import os, time
 from collections import deque
 from typing import Optional
+from mathbode.utils import strict_rules, ANSWER_START, ANSWER_END
 
 # ---------- helpers ----------
 
@@ -116,10 +117,18 @@ class OpenAIClient(BaseClient):
 
             resp = self.client.chat.completions.create(
                 model=self.model,
-                temperature=float(self.temperature),
-                max_tokens=int(self.max_tokens),
-                messages=[{"role": "user", "content": prompt}],
+                temperature=float(self.temperature),       # 0.0 recommended
+                max_tokens=int(self.max_tokens),           # 24 is a good starting point
+                messages=[
+                    {"role": "system", "content": strict_rules()},
+                    {"role": "user", "content": "Example: 2+3"},
+                    {"role": "assistant", "content": f"{ANSWER_START} 5.000000 {ANSWER_END}"},
+                    {"role": "user", "content": prompt},   # prompt = just the problem text
+                ],
+                stop=[ANSWER_END],                         # <— key: stop exactly at END tag
+                top_p=1.0,
             )
+
             out = (resp.choices[0].message.content or "").strip()
 
             # usage fields
@@ -171,12 +180,18 @@ class GeminiClient(BaseClient):
                 self._rl_req.wait()
 
             resp = self.model_obj.generate_content(
-                prompt,
+                [{"role":"user","parts":[ "Example: 2+3" ]},
+                {"role":"model","parts":[ f"{ANSWER_START} 5.000000 {ANSWER_END}" ]},
+                {"role":"user","parts":[ prompt ]}],
+                system_instruction=strict_rules(),
                 generation_config={
                     "temperature": float(self.temperature),
                     "max_output_tokens": int(self.max_tokens),
+                    "stop_sequences": [ANSWER_END],       # <— stop at END tag
+                    "top_p": 1.0,
                 },
             )
+
             # Extract text robustly
             text = getattr(resp, "text", None)
             if not text and getattr(resp, "candidates", None):
@@ -231,8 +246,15 @@ class AnthropicClient(BaseClient):
                 model=self.model,
                 temperature=float(self.temperature),
                 max_tokens=int(self.max_tokens),
-                messages=[{"role": "user", "content": prompt}],
+                system=strict_rules(),
+                messages=[
+                    {"role": "user", "content": "Example: 2+3"},
+                    {"role": "assistant", "content": f"{ANSWER_START} 5.000000 {ANSWER_END}"},
+                    {"role": "user", "content": prompt},
+                ],
+                stop_sequences=[ANSWER_END],               # <— stop at END tag
             )
+
             # pull text out
             chunks = []
             for b in getattr(msg, "content", []) or []:
@@ -280,13 +302,26 @@ class TogetherClient(BaseClient):
             if self._rl_req:
                 self._rl_req.wait()
 
+            from mathbode.utils import strict_rules, ANSWER_START, ANSWER_END
+
             response = self.client.chat.completions.create(
                 model=self.model,
-                temperature=float(self.temperature),
-                max_tokens=int(self.max_tokens),
-                messages=[{"role": "user", "content": prompt}],
+                temperature=float(self.temperature),       # 0.0 recommended
+                max_tokens=int(self.max_tokens),           # 24 is a good starting point
+                messages=[
+                    {"role": "system", "content": strict_rules()},
+                    {"role": "user", "content": "Example: 2+3"},
+                    {"role": "assistant", "content": f"{ANSWER_START} 5.000000 {ANSWER_END}"},
+                    {"role": "user", "content": prompt},   # prompt = just the problem text
+                ],
+                stop=[ANSWER_END],                         # <— key: stop exactly at END tag
+                top_p=1.0,
             )
+
+
             out = (response.choices[0].message.content or "").strip()
+            if not out.endswith(ANSWER_END):
+                out = f"{out} {ANSWER_END}"
 
             # usage
             u = getattr(response, "usage", None)

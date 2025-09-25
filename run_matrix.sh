@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Make local 'mathbode' package importable (expects mathbode/{__init__.py,clients,utils,data,infer,summarize,plot_curves}.py)
+# Make local 'mathbode' package importable
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH:-}"
 
@@ -10,26 +10,27 @@ export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH:-}"
 # =======================
 
 # Edit these to taste (comment out arrays to skip a provider)
-OPENAI_MODELS=()                                 # e.g. ("gpt-4o-mini")
-GEMINI_MODELS=()                                 # e.g. ("gemini-2.5-flash")
+GEMINI_MODELS=("gemini-2.5-pro")                                 # e.g. ("gemini-2.5-flash")
 ANTHROPIC_MODELS=()                              # e.g. ("claude-3-7-sonnet-20250219")
-TOGETHER_MODELS=("meta-llama/Llama-3.3-70B-Instruct-Turbo-Free")
+TOGETHER_MODELS=("deepseek-ai/DeepSeek-V3.1")
+OPENAI_MODELS=("gpt-5")                                 # e.g. ("gpt-4o-mini")
+# "Qwen/Qwen3-235B-A22B-Instruct-2507-tput"
 
 # Presets:
-#   SMOKE    : freqs {4,8}, phase {0},    sweeps/base-keys per family K=2
+#   SMOKE    : freqs {4,8}, phase {0},    K=2 base keys/family
 #   MVP      : freqs {4,8,16}, phase {0}, K=2
 #   MVP_PLUS : freqs {1,2,4,8,16}, tri-phase only for {4,8}, K=2
 #   FULL     : freqs {1,2,4,8,16}, tri-phase for all, K=2
-CONFIG="${CONFIG:-MVP_PLUS}"              # override like: CONFIG=FULL ./run_matrix.sh
+CONFIG="${CONFIG:-MVP_PLUS}"              # override like: CONFIG=FULL ./run_matrix_infer_only.sh
 
 OUTDIR="${OUTDIR:-results}"
 WORKERS="${WORKERS:-4}"
 TEMP="${TEMP:-0.0}"
-MAXTOK="${MAXTOK:-32}"
+MAXTOK="${MAXTOK:-128}"
 API_BASE="${API_BASE:-}"                  # optional OpenAI-compatible base URL
 SIGNAL="${SIGNAL:-sinusoid}"              # dataset drive type
 SWEEPS="${SWEEPS:-2}"                     # number of base keys per family; or "ALL"
-BASE_KEYS_FILE="${BASE_KEYS_FILE:-}"      # optional CSV: family,question_id,amplitude_scale
+BASE_KEYS_FILE="${BASE_KEYS_FILE:-}"      # optional CSV: family,question_id,amplitude_scale[,p0]
 
 # Families to include (all 5 by default)
 FAMILIES=("linear_solve" "ratio_saturation" "exponential_interest" "linear_system" "similar_triangles")
@@ -48,7 +49,7 @@ esac
 
 mkdir -p "$OUTDIR" cache subsets
 
-echo "=== MathBode Run Matrix ==="
+echo "=== MathBode Inference Matrix (inference only) ==="
 echo "CONFIG: $CONFIG | Mode: $MB_MODE | Signal: $SIGNAL"
 echo "Families: ${FAMILIES[*]}"
 echo "Freqs: ${FREQS[*]}   Phases: ${PHASES[*]}   Base-keys per family (SWEEPS): $SWEEPS"
@@ -89,7 +90,6 @@ base_keys_file = os.environ.get("MB_BASE_KEYS_FILE","")
 random.seed(42)
 df = load_mathbode(families)
 
-# keep only requested drive type
 if "signal_type" in df.columns:
     df = df[df["signal_type"].str.lower() == signal].copy()
 else:
@@ -100,9 +100,9 @@ def phases_for_freq(f):
         return [0,120,240] if f in {4,8} else [0]
     return phases_env
 
-required = {(f, ph) for f in freqs for ph in phases_for_freq(f)}
+required_pairs = [(f, ph) for f in freqs for ph in phases_for_freq(f)]
+allowed = pd.DataFrame(required_pairs, columns=["frequency_cycles","phase_deg"]).drop_duplicates()
 
-# Base key = (family, question_id, amplitude_scale)  (add p0 if present and variable)
 base_cols = ["family","question_id","amplitude_scale"]
 if "p0" in df.columns and df["p0"].nunique() > 1:
     base_cols.append("p0")
@@ -116,14 +116,12 @@ def load_base_keys_file(path):
             if not line or line.startswith("#"): continue
             parts=[p.strip() for p in line.split(",")]
             if len(parts) < 3: continue
-            fam, qid, amp = parts[:3]
-            rec = {"family":fam, "question_id":qid, "amplitude_scale":float(amp)}
+            rec = {"family":parts[0], "question_id":parts[1], "amplitude_scale":float(parts[2])}
             if len(parts) >= 4:
                 rec["p0"] = float(parts[3])
             keys.append(rec)
     return pd.DataFrame(keys)
 
-# choose base keys
 if base_keys_file and os.path.exists(base_keys_file):
     base_df = load_base_keys_file(base_keys_file)
     base_df = base_df[base_df["family"].isin(families)]
@@ -139,34 +137,39 @@ keep = []
 T_mode = None
 
 for _, bk in base_df.iterrows():
-    mask = (df["family"]==bk["family"]) & (df["question_id"]==bk["question_id"]) & (df["amplitude_scale"]==bk["amplitude_scale"])
+    mask = (
+        (df["family"]==bk["family"]) &
+        (df["question_id"]==bk["question_id"]) &
+        (df["amplitude_scale"]==bk["amplitude_scale"])
+    )
     if "p0" in bk and "p0" in df.columns:
         mask &= (df["p0"]==bk["p0"])
     sub = df[mask]
     if sub.empty: 
         continue
 
-    # coverage & constant T across required grid
-    ok=True; Ts=set()
-    for f, ph in required:
-        g = sub[(sub["frequency_cycles"]==f) & (sub["phase_deg"]==ph)]
-        if g.empty:
-            ok=False; break
-        Ts.add(g["time_step"].nunique())
-    if not ok or len(Ts) != 1:
-        continue
-    T_here = list(Ts)[0]
-    if T_mode is None: T_mode = T_here
-    if T_here != T_mode: 
+    sub_req = sub.merge(allowed, on=["frequency_cycles","phase_deg"], how="inner")
+    if sub_req.empty:
         continue
 
-    sub_keep = sub[sub["frequency_cycles"].isin([f for f,_ in required]) &
-                   sub["phase_deg"].isin([ph for _,ph in required])]
-    keep.extend(sub_keep["row_id"].tolist())
+    counts = sub_req.groupby(["frequency_cycles","phase_deg"])["time_step"].nunique()
+    if len(counts) != len(allowed):
+        continue
+    Ts = set(counts.values)
+    if len(Ts) != 1:
+        continue
+    T_here = counts.iloc[0]
+    if T_mode is None:
+        T_mode = T_here
+    if T_here != T_mode:
+        continue
+
+    keep.extend(sub_req["row_id"].tolist())
 
 keep = sorted(set(keep))
 with open(rowid_path,"w") as f:
     for rid in keep: f.write(str(rid)+"\n")
+
 print(f"Wrote {len(keep)} row_ids to {rowid_path} | signal={signal} | T={T_mode}")
 PY
 else
@@ -174,7 +177,7 @@ else
 fi
 
 # =======================
-# Step 2: function to run one model (inference -> enrich -> summarize -> plots)
+# Step 2: function to run one model (INFERENCE ONLY)
 # =======================
 run_one_model () {
   local provider="$1"
@@ -187,13 +190,13 @@ run_one_model () {
 
   echo
   echo ">>> $provider :: $model"
-  # Sanity: keys
-  if [[ "$provider" == "openai" && -z "${OPENAI_API_KEY:-}" ]]; then echo "   [SKIP] Missing OPENAI_API_KEY"; return 0; fi
-  if [[ "$provider" == "gemini" && -z "${GOOGLE_API_KEY:-}" ]]; then echo "   [SKIP] Missing GOOGLE_API_KEY"; return 0; fi
+  # API keys sanity
+  if [[ "$provider" == "gemini"    && -z "${GOOGLE_API_KEY:-}"    ]]; then echo "   [SKIP] Missing GOOGLE_API_KEY"; return 0; fi
   if [[ "$provider" == "anthropic" && -z "${ANTHROPIC_API_KEY:-}" ]]; then echo "   [SKIP] Missing ANTHROPIC_API_KEY"; return 0; fi
-  if [[ "$provider" == "together" && -z "${TOGETHER_API_KEY:-}" ]]; then echo "   [SKIP] Missing TOGETHER_API_KEY"; return 0; fi
+  if [[ "$provider" == "together"  && -z "${TOGETHER_API_KEY:-}"  ]]; then echo "   [SKIP] Missing TOGETHER_API_KEY"; return 0; fi
+  if [[ "$provider" == "openai"    && -z "${OPENAI_API_KEY:-}"    ]]; then echo "   [SKIP] Missing OPENAI_API_KEY"; return 0; fi
 
-  # Inference on fixed row_ids; run_inference must preserve row_id + y_hat
+  # Inference on fixed row_ids; run_inference writes preds_{tag}.parquet
   python - <<'PY' || { echo "   [ERROR] Inference failed"; return 1; }
 import os, pandas as pd
 from mathbode.data import load_mathbode
@@ -209,14 +212,12 @@ api_base = os.environ.get("MB_API_BASE") or None
 rowid_path = os.environ["MB_ROWIDS"]
 families = os.environ["MB_FAMILIES"].split(",")
 
-# Load all source rows then shrink to subset
 src = load_mathbode(families)
 row_ids = [int(x.strip()) for x in open(rowid_path).read().splitlines() if x.strip()]
 src = src[src["row_id"].isin(row_ids)].copy().reset_index(drop=True)
 
-# Inference (prompt-only) — implementation should emit {row_id, prompt, y_hat, raw, usage...}
 pred_path = run_inference(
-    df=src[["row_id","prompt"]],   # pass only what's needed to call the API
+    df=src[["row_id","prompt"]],
     provider=provider,
     model=model,
     outdir=outdir,
@@ -226,62 +227,12 @@ pred_path = run_inference(
     workers=workers,
     provider_rps=0.0
 )
-print("Preds:", pred_path)
-PY
-
-  # Enrich predictions with dataset columns; summarize; plot
-  python - <<'PY' || { echo "   [ERROR] Summarize/plot failed"; return 1; }
-import os, pandas as pd
-from mathbode.data import load_mathbode
-from mathbode.summarize import summarize_gain_phase_all, summarize_gain_phase_means
-from mathbode.plot_curves import plot_curves
-
-provider = os.environ["MB_PROVIDER"]
-model    = os.environ["MB_MODEL"]
-outdir   = os.environ["MB_OUTDIR"]
-families = os.environ["MB_FAMILIES"].split(",")
-rowid_path = os.environ["MB_ROWIDS"]
-
-tag = f"{provider}_{model}".replace("/","_")
-pred_path = os.path.join(outdir, f"preds_{tag}.parquet")
-preds = pd.read_parquet(pred_path)   # must contain: row_id, y_hat (and ideally usage tokens)
-
-# Join predictions back to the source rows so we have family/freq/phase/etc.
-src = load_mathbode(families)
-row_ids = [int(x.strip()) for x in open(rowid_path).read().splitlines() if x.strip()]
-src = src[src["row_id"].isin(row_ids)].copy()
-
-# merge on row_id (left: src to keep ordering & metadata)
-merged = src.merge(preds, on="row_id", how="left", suffixes=("",""))
-enriched_path = os.path.join(outdir, f"{tag}_enriched.parquet")
-merged.to_parquet(enriched_path, index=False)
-print("Enriched preds:", enriched_path)
-
-# Summaries
-all_rows = summarize_gain_phase_all(merged.rename(columns={"final_answer":"y_hat"}) if "final_answer" in merged.columns else merged)
-all_csv = os.path.join(outdir, f"{tag}_all_rows.csv")
-all_rows.to_csv(all_csv, index=False)
-print("All-rows:", all_csv)
-
-summary = summarize_gain_phase_means(all_rows)
-sum_csv = os.path.join(outdir, f"summary_{tag}.csv")
-summary.to_csv(sum_csv, index=False)
-print("Summary:", sum_csv)
-
-# Mid-band quick stats
-mid = summary[summary["frequency_cycles"].isin([4,8])]
-if len(mid):
-    print("mean |G-1| (mid-band):", float((mid["gain"]-1).abs().mean()))
-    print("mean |phi| deg (mid-band):", float(mid["phase_deg"].abs().mean()))
-
-# Plots
-plot_curves(summary, tag, outdir)
-print("Plots saved for", tag)
+print("Preds parquet written:", pred_path)
 PY
 }
 
 # =======================
-# Step 3: loop over model matrices
+# Step 3: loop over model matrices (inference only)
 # =======================
 export MB_OUTDIR="$OUTDIR"
 export MB_WORKERS="$WORKERS"
@@ -289,30 +240,6 @@ export MB_TEMP="$TEMP"
 export MB_MAXTOK="$MAXTOK"
 export MB_API_BASE="$API_BASE"
 
-# OpenAI
-if (( ${#OPENAI_MODELS[@]} )); then
-  for m in "${OPENAI_MODELS[@]}"; do
-    export MB_PROVIDER="openai"
-    export MB_MODEL="$m"
-    run_one_model "openai" "$m" "$OUTDIR" "$WORKERS" "$TEMP" "$MAXTOK" "$API_BASE" || true
-  done
-fi
-# Gemini
-if (( ${#GEMINI_MODELS[@]} )); then
-  for m in "${GEMINI_MODELS[@]}"; do
-    export MB_PROVIDER="gemini"
-    export MB_MODEL="$m"
-    run_one_model "gemini" "$m" "$OUTDIR" "$WORKERS" "$TEMP" "$MAXTOK" "" || true
-  done
-fi
-# Anthropic
-if (( ${#ANTHROPIC_MODELS[@]} )); then
-  for m in "${ANTHROPIC_MODELS[@]}"; do
-    export MB_PROVIDER="anthropic"
-    export MB_MODEL="$m"
-    run_one_model "anthropic" "$m" "$OUTDIR" "$WORKERS" "$TEMP" "$MAXTOK" "" || true
-  done
-fi
 # Together
 if (( ${#TOGETHER_MODELS[@]} )); then
   for m in "${TOGETHER_MODELS[@]}"; do
@@ -322,5 +249,32 @@ if (( ${#TOGETHER_MODELS[@]} )); then
   done
 fi
 
+# Gemini
+if (( ${#GEMINI_MODELS[@]} )); then
+  for m in "${GEMINI_MODELS[@]}"; do
+    export MB_PROVIDER="gemini"
+    export MB_MODEL="$m"
+    run_one_model "gemini" "$m" "$OUTDIR" "$WORKERS" "$TEMP" "$MAXTOK" "" || true
+  done
+fi
+
+# Anthropic
+if (( ${#ANTHROPIC_MODELS[@]} )); then
+  for m in "${ANTHROPIC_MODELS[@]}"; do
+    export MB_PROVIDER="anthropic"
+    export MB_MODEL="$m"
+    run_one_model "anthropic" "$m" "$OUTDIR" "$WORKERS" "$TEMP" "$MAXTOK" "" || true
+  done
+fi
+
+# OpenAI
+if (( ${#OPENAI_MODELS[@]} )); then
+  for m in "${OPENAI_MODELS[@]}"; do
+    export MB_PROVIDER="openai"
+    export MB_MODEL="$m"
+    run_one_model "openai" "$m" "$OUTDIR" "$WORKERS" "$TEMP" "$MAXTOK" "$API_BASE" || true
+  done
+fi
+
 echo
-echo "✅ Done. Results in: $OUTDIR"
+echo "✅ Done. Inference parquets are in: $OUTDIR"

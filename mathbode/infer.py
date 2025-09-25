@@ -29,7 +29,7 @@ def run_inference(
     max_tokens: int = 32,
     api_base: Optional[str] = None,
     workers: int = 4,
-    provider_rps: float = 0.0
+    provider_rps: float = 2.1
 ) -> str:
     os.makedirs(outdir, exist_ok=True)
     tag=f"{provider}_{model}".replace("/","_")
@@ -61,30 +61,43 @@ def run_inference(
         try:
             # Build prompt with standardized format instructions
             prompt = build_prompt(r["prompt"])
-            
+
             # Get model response with retries
             txt = call_with_retries(client, prompt, retries=3, backoff=0.8)
 
-            # Validate & extract
-            number_str, _ = coerce_to_fixed_decimals(txt, 6)
-            if number_str is None:
-                # one more synchronous attempt here (optional but helps transient hiccups)
-                txt = call_with_retries(client, prompt, retries=1, backoff=1.2)
-                number_str, _ = coerce_to_fixed_decimals(txt, 6)
-
-            # If still invalid, mark as error for this row
-            if number_str is None:
-                raw_text[i] = txt or "ERROR: invalid format"
+            if not txt or not txt.strip():
+                err = getattr(client, "last_error", None)
+                raw_text[i]  = f"ERROR: {err or 'empty_response'}"
                 final_line[i] = "ERROR"
-                y_hat[i] = math.nan
-                return  # don't sleep here; worker is done
+                y_hat[i]      = math.nan
+                return
+
+            # Validate & extract
+            number_str, number_val = coerce_to_fixed_decimals(txt, 6)
+            
+            # First retry if needed
+            if number_str is None:
+                txt_retry = call_with_retries(client, prompt, retries=1, backoff=1.2)
+                number_str, number_val = coerce_to_fixed_decimals(txt_retry or txt, 6)
+                
+                # If still None after retry, record error and return
+                if number_str is None:
+                    raw_text[i] = (txt_retry or txt or "").strip() or "ERROR: invalid format"
+                    final_line[i] = "ERROR"
+                    y_hat[i] = math.nan
+                    return
+
+            raw_text[i]  = txt 
+            final_line[i] = force_final_line(number_str, places=6)  # "FINAL: 12.345600"
+            y_hat[i] = number_val
+
+
         except Exception as e:
             print(f"Error processing row {i}: {str(e)}")
-            # Store error information
-            raw_text[i] = f"ERROR: {str(e)}"
+            raw_text[i]  = f"ERROR: {str(e)}"
             final_line[i] = "ERROR"
-            y_hat[i] = math.nan
-        
+            y_hat[i]      = math.nan
+
         # Rate limiting
         if provider_rps > 0:
             import time; time.sleep(1.0 / provider_rps)

@@ -1,49 +1,60 @@
-# mathbode/utils.py
-import re, time, json, math
-from decimal import Decimal, ROUND_HALF_UP
+import re, time
 
-FINAL_RE = re.compile(r'^\s*FINAL:\s*([+-]?\d+(?:\.\d+))\s*$', re.MULTILINE)
+def call_with_retries(client, prompt: str, retries: int = 3, backoff: float = 0.8) -> str:
+    for i in range(max(0, int(retries))):
+        out = client.generate(prompt)
+        if isinstance(out, str) and out.strip():
+            return out
+        time.sleep(max(0.0, backoff) * (2 ** i))
+    return ""
 
+# Sentinels (must match what you use in examples & stops)
+ANSWER_START = "[answer_start]"
+ANSWER_END   = "[answer_end]"
+
+# Normalize problematic unicode/newlines before parsing
+_ZW = "\u200b\u200c\u200d\u2060\ufeff"   # zero-width chars
+_BAD_MINUS = "−"                          # U+2212
+_NBSP = "\xa0"
+
+def _norm(s: str) -> str:
+    if not isinstance(s, str): return ""
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    for ch in _ZW: s = s.replace(ch, "")
+    s = s.replace(_BAD_MINUS, "-").replace(_NBSP, " ")
+    return s
+
+# Exactly 6 decimals between tags; allow whitespace/newlines
+ANSWER_RE = re.compile(
+    rf"{re.escape(ANSWER_START)}\s*([+-]?\d+\.\d{{6}})\s*{re.escape(ANSWER_END)}",
+    flags=re.DOTALL  # allow newline between start/number/end
+)
 
 def strict_rules() -> str:
     return (
-        "Output EXACTLY one line: 'FINAL: -0.000000' with a dot decimal and six digits. "
-        "No scientific notation, commas, spaces, or units. Round HALF-UP. "
-        "Output ONLY that single line and NOTHING ELSE."
+        f"You may reason a little, but you MUST end with exactly one final line:\n"
+        f"{ANSWER_START} -0.000000 {ANSWER_END}\n"
+        "The number must have exactly six digits after the decimal (no scientific notation). "
+        "No other text after the END tag."
     )
 
-def build_prompt(raw_prompt:str)->str:
-    # keep math content intact, append rules for recency
-    return f"{raw_prompt}\n\n{strict_rules()}"
+def build_prompt(raw_prompt: str) -> str:
+    return raw_prompt  # user content = just the problem text
 
-def coerce_to_fixed_decimals(text:str, places:int=6):
+def coerce_to_fixed_decimals(text: str, places: int = 6):
     if not text:
         return None, None
-
-    # Find the last valid FINAL line
+    text = _norm(text)
     last = None
-    for m in FINAL_RE.finditer(text):
+    for m in ANSWER_RE.finditer(text):
         last = m
     if not last:
         return None, None
+    num_str = last.group(1)  # already exactly 6 decimals; NO rounding
+    try:
+        return num_str, float(num_str)
+    except Exception:
+        return None, None
 
-    # Ensure the ENTIRE output (ignoring surrounding whitespace) is just that one line
-    only_line = last.group(0).strip()
-    if text.strip() != only_line:
-        return None, None  # extra chatter → invalid → trigger retry
-
-    # Quantize HALF-UP to N decimals
-    val = Decimal(last.group(1))
-    q = Decimal(10) ** -places
-    fixed = val.quantize(q, rounding=ROUND_HALF_UP)
-    return f"{fixed}", float(fixed)
-
-def force_final_line(text_num, places:int=6)->str:
-    return f"FINAL: {text_num}" if text_num is not None else ""
-
-def call_with_retries(client, prompt:str, retries:int=3, backoff:float=0.8)->str:
-    for i in range(retries):
-        out=client.generate(prompt)
-        if out: return out
-        time.sleep(backoff*(2**i))
-    return ""
+def force_final_line(text_num: str, places: int = 6) -> str:
+    return f"{ANSWER_START} {text_num} {ANSWER_END}" if text_num is not None else ""
