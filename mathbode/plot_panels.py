@@ -7,80 +7,98 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+from matplotlib import patheffects
+from matplotlib.patches import FancyBboxPatch
 from typing import Dict, List, Tuple, Optional
 import warnings
 warnings.filterwarnings('ignore')
 
 # ----------------------------- Styling -----------------------------
 
-# Modern, clean aesthetic with better typography and colors
-plt.style.use('seaborn-v0_8-whitegrid')
+# Ultra-modern aesthetic with clean gradients
 plt.rcParams.update({
     "figure.dpi": 150,
     "savefig.dpi": 300,
     "font.family": "sans-serif",
-    "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
-    "font.size": 11,
-    "axes.titlesize": 14,
-    "axes.titleweight": "bold",
-    "axes.labelsize": 11,
-    "axes.labelweight": "medium",
-    "legend.fontsize": 10,
-    "xtick.labelsize": 10,
-    "ytick.labelsize": 10,
+    "font.sans-serif": ["SF Pro Display", "Helvetica Neue", "Arial", "DejaVu Sans"],
+    "font.size": 12,
+    "axes.titlesize": 15,
+    "axes.titleweight": 600,
+    "axes.labelsize": 12,
+    "axes.labelweight": 500,
+    "legend.fontsize": 11,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 11,
     "axes.grid": True,
-    "grid.alpha": 0.15,
-    "grid.linestyle": "--",
-    "grid.linewidth": 0.8,
+    "grid.alpha": 0.08,
+    "grid.linestyle": "-",
+    "grid.linewidth": 0.5,
     "axes.spines.top": False,
     "axes.spines.right": False,
-    "axes.linewidth": 1.2,
-    "axes.edgecolor": "#333333",
-    "figure.facecolor": "white",
-    "axes.facecolor": "white",
+    "axes.spines.left": False,
+    "axes.spines.bottom": False,
+    "axes.linewidth": 0,
+    "axes.edgecolor": "none",
+    "figure.facecolor": "#FAFAFA",
+    "axes.facecolor": "#FAFAFA",
+    "xtick.major.size": 0,
+    "ytick.major.size": 0,
+    "xtick.minor.size": 0,
+    "ytick.minor.size": 0,
 })
 
-# Professional color palette with better contrast
+# Premium color palette with vibrant gradients
 COLORS = [
-    "#2E86AB",  # Deep blue
-    "#A23B72",  # Rose
-    "#F18F01",  # Orange
-    "#C73E1D",  # Red
-    "#6A994E",  # Green
-    "#8338EC",  # Purple
-    "#FB5607",  # Bright orange
-    "#3A86FF",  # Bright blue
+    "#FF6B6B",  # Coral red
+    "#4ECDC4",  # Teal
+    "#45B7D1",  # Sky blue
+    "#96CEB4",  # Sage green
+    "#FECA57",  # Golden yellow
+    "#9B59B6",  # Purple
+    "#FF8B94",  # Pink
+    "#74B9FF",  # Light blue
 ]
 
-MARKERS = ["o", "s", "D", "^", "v", "P", "X", "*", "h"]
-LINEWIDTH = 2.2
-MS = 7
-MARKER_EDGE_WIDTH = 1.5
+# Gradient color pairs for fills
+GRADIENT_PAIRS = [
+    ("#FF6B6B", "#FF8E53"),
+    ("#667EEA", "#764BA2"),
+    ("#06BEB6", "#48B1BF"),
+    ("#F093FB", "#F5576C"),
+    ("#4FACFE", "#00F2FE"),
+    ("#43E97B", "#38F9D7"),
+    ("#FA709A", "#FEE140"),
+    ("#30CFD0", "#330867"),
+]
+
+MARKERS = ["o", "s", "D", "^", "v", "p", "h", "*", "X"]
+LINEWIDTH = 2.8
+MS = 8
+MARKER_EDGE_WIDTH = 2
 MARKER_EDGE_COLOR = "white"
 
-# Enhanced legend styling
+# Enhanced legend styling with gradient background
 LEGEND_KW = dict(
     loc="upper center",
-    bbox_to_anchor=(0.5, -0.15),
+    bbox_to_anchor=(0.5, -0.12),
     ncol=3,
     frameon=True,
     fancybox=True,
-    shadow=True,
-    borderpad=1,
-    columnspacing=2,
-    handlelength=2.5,
+    shadow=False,
+    borderpad=1.2,
+    columnspacing=2.5,
+    handlelength=2.8,
     facecolor="white",
-    edgecolor="#cccccc",
-    framealpha=0.95,
+    edgecolor="none",
+    framealpha=1.0,
+    borderaxespad=0.5,
 )
 
-# Subtle band colors with gradients
-BAND_FACE = "#f7f7f7"
-BAND_EDGE = "#e0e0e0"
-BAND_ALPHA = 0.6
+# Gradient background colors
+BG_GRADIENT_START = "#FFFFFF"
+BG_GRADIENT_END = "#F8F9FA"
 
-# Families in the desired order
+# Families in desired order
 FAMILY_ORDER = [
     "linear_solve",
     "ratio_saturation",
@@ -89,7 +107,7 @@ FAMILY_ORDER = [
     "similar_triangles",
 ]
 
-# Pretty names
+# Pretty names with better typography
 FAMILY_PRETTY = {
     "linear_solve": "Linear Solve",
     "ratio_saturation": "Ratio Saturation",
@@ -98,30 +116,21 @@ FAMILY_PRETTY = {
     "similar_triangles": "Similar Triangles",
 }
 
+# Model pretty-name overrides
 MODEL_PRETTY_OVERRIDES = {
     r"openai.*gpt[-_]?4o": "GPT-4o",
     r"meta.*llama.*": "Llama 4 Instruct",
     r"deepseek.*v3\.?1": "DeepSeek V3.1",
     r"mistral.*mixtral.*8x7b": "Mixtral 8×7B",
-    r"qwen.*235b.*a22b.*instruct": "Qwen3 235B Instruct",
+    r"qwen.*235b.*a22b.*instruct": "Qwen3 235B",
     r"qwen.*": "Qwen3",
-}
-
-# Model to logo mapping (logos should be in logos/ directory)
-MODEL_LOGOS = {
-    "GPT-4o": "logos/oai.png",
-    "Llama 4 Instruct": "logos/meta.png",
-    "DeepSeek V3.1": "logos/deepseek.png",
-    "Mixtral 8×7B": "logos/mixtral.png",
-    "Qwen3 235B Instruct": "logos/qwen.png",
-    "Qwen3": "logos/qwen.png",
 }
 
 # -------------------------- IO + Harmonization --------------------------
 
 def _read_any(path: str) -> pd.DataFrame:
     ext = os.path.splitext(path)[1].lower()
-    if ext in (".csv",):
+    if ext == ".csv":
         return pd.read_csv(path)
     if ext in (".parquet", ".pq"):
         return pd.read_parquet(path)
@@ -132,66 +141,49 @@ def _guess_model_name(path: str) -> str:
     stem = re.sub(r"^summary[_-]?", "", stem, flags=re.I)
     stem = re.sub(r"\.(csv|parquet|pq)$", "", stem, flags=re.I)
     raw = stem
-    # Pretty mapping via regex overrides
     for pat, pretty in MODEL_PRETTY_OVERRIDES.items():
         if re.search(pat, raw, flags=re.I):
             return pretty
-    # Fallback: squish and title-case lightly
     raw = raw.replace("_", " ").replace("-", " ").strip()
     raw = re.sub(r"\s+", " ", raw)
     return raw
 
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    # Accept either 'phase_deg' or a renamed column
-    col_map = {}
-    # many runs have 'h2_over_h1_model', expose as 'h2_over_h1'
-    if "h2_over_h1" not in df.columns:
-        if "h2_over_h1_model" in df.columns:
-            col_map["h2_over_h1_model"] = "h2_over_h1"
-    # for backward compat
-    rename_candidates = {
-        "phase_err_deg": "phase_deg",
-        "phase_deg_model_minus_truth": "phase_deg",
-    }
-    for a, b in rename_candidates.items():
-        if a in df.columns and "phase_deg" not in df.columns:
-            col_map[a] = b
 
-    if col_map:
-        df = df.rename(columns=col_map)
+    # Expose h2_over_h1 if the file uses _model suffix
+    if "h2_over_h1" not in df.columns and "h2_over_h1_model" in df.columns:
+        df = df.rename(columns={"h2_over_h1_model": "h2_over_h1"})
 
-    # types
+    # Phase column harmonization
+    if "phase_deg" not in df.columns:
+        for alt in ("phase_err_deg", "phase_deg_model_minus_truth"):
+            if alt in df.columns:
+                df = df.rename(columns={alt: "phase_deg"})
+                break
+
+    # Types
     if "frequency_cycles" in df.columns:
         df["frequency_cycles"] = pd.to_numeric(df["frequency_cycles"], errors="coerce").astype("Int64")
-    if "gain" in df.columns:
-        df["gain"] = pd.to_numeric(df["gain"], errors="coerce")
-    if "phase_deg" in df.columns:
-        df["phase_deg"] = pd.to_numeric(df["phase_deg"], errors="coerce")
-    if "r2_model" in df.columns:
-        df["r2_model"] = pd.to_numeric(df["r2_model"], errors="coerce")
-    if "compliance_rate" in df.columns:
-        df["compliance_rate"] = pd.to_numeric(df["compliance_rate"], errors="coerce")
-    for c in ("h2_over_h1", "res_rms_norm", "res_acf1"):
+    for c in ("gain","phase_deg","r2_model","compliance_rate","h2_over_h1","res_rms_norm","res_acf1"):
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # standardize family names
     if "family" in df.columns:
         df["family"] = df["family"].astype(str)
+
     return df
 
 def load_summaries(summaries_dir: str) -> Dict[str, pd.DataFrame]:
-    paths = sorted(glob.glob(os.path.join(summaries_dir, "summary*.csv"))) + \
-            sorted(glob.glob(os.path.join(summaries_dir, "summary*.parquet"))) + \
-            sorted(glob.glob(os.path.join(summaries_dir, "*.csv")))  # tolerate loose files
+    paths = sorted(glob.glob(os.path.join(summaries_dir, "summary*.csv"))) \
+          + sorted(glob.glob(os.path.join(summaries_dir, "summary*.parquet"))) \
+          + sorted(glob.glob(os.path.join(summaries_dir, "*.csv")))
     models: Dict[str, pd.DataFrame] = {}
     for p in paths:
         try:
             df = _read_any(p)
         except Exception:
             continue
-        # must contain columns we plot
         if "family" not in df.columns or "frequency_cycles" not in df.columns:
             continue
         df = _normalize_columns(df)
@@ -207,25 +199,32 @@ def _safe_sem(x: pd.Series) -> float:
         return 0.0
     return float(x.std(ddof=1) / max(np.sqrt(len(x)), 1.0))
 
-def _band(ax, y0, y1):
-    """Create a subtle gradient band for visual guidance"""
-    # Create gradient effect with multiple alpha levels
-    n_bands = 3
-    alphas = np.linspace(BAND_ALPHA * 0.3, BAND_ALPHA, n_bands)
-    y_range = y1 - y0
-    for i, alpha in enumerate(alphas):
-        y_start = y0 + (i * y_range / n_bands)
-        y_end = y0 + ((i + 1) * y_range / n_bands)
-        ax.axhspan(y_start, y_end, color=BAND_FACE, alpha=alpha, zorder=0, linewidth=0)
-    # Add subtle edge lines
-    ax.axhline(y0, color=BAND_EDGE, linewidth=0.5, alpha=0.3, zorder=1)
-    ax.axhline(y1, color=BAND_EDGE, linewidth=0.5, alpha=0.3, zorder=1)
+def _add_gradient_background(ax):
+    """Add a subtle gradient background to the plot"""
+    gradient = np.linspace(0, 1, 256).reshape(256, 1)
+    gradient = np.hstack((gradient, gradient))
+    
+    extent = [ax.get_xlim()[0], ax.get_xlim()[1], ax.get_ylim()[0], ax.get_ylim()[1]]
+    ax.imshow(gradient, extent=extent, aspect='auto', cmap='gray_r', 
+              alpha=0.03, zorder=-10, interpolation='bilinear')
+
+def _add_subtle_band(ax, y0, y1, color="#E8F4FD", alpha=0.3):
+    """Add a subtle shaded band with soft edges"""
+    rect = FancyBboxPatch((ax.get_xlim()[0], y0), 
+                          ax.get_xlim()[1] - ax.get_xlim()[0], 
+                          y1 - y0,
+                          boxstyle="round,pad=0", 
+                          facecolor=color,
+                          edgecolor='none',
+                          alpha=alpha,
+                          zorder=0,
+                          transform=ax.transData)
+    ax.add_patch(rect)
 
 def _prep_family_axes(ncols: int, nrows: int = 1, figsize=(15, 4.2)):
     fig, axs = plt.subplots(nrows, ncols, figsize=figsize, sharex=False, sharey=False)
     axs = np.array(axs).reshape(nrows, ncols)
-    # Add subtle background
-    fig.patch.set_facecolor('white')
+    fig.patch.set_facecolor('#FAFAFA')
     return fig, axs
 
 def _family_iter():
@@ -234,7 +233,7 @@ def _family_iter():
 
 def _collect_by_family(models: Dict[str, pd.DataFrame], metric: str) -> Dict[str, Dict[str, pd.DataFrame]]:
     out: Dict[str, Dict[str, pd.DataFrame]] = {}
-    for fam, _pretty in _family_iter():
+    for fam, _ in _family_iter():
         out[fam] = {}
         for model, df in models.items():
             if metric not in df.columns:
@@ -246,34 +245,20 @@ def _collect_by_family(models: Dict[str, pd.DataFrame], metric: str) -> Dict[str
             out[fam][model] = sub
     return out
 
-def _create_legend_with_logos(fig, handles, labels, logo_dir: Optional[str] = None):
-    """Create enhanced legend with optional model provider logos"""
-    if logo_dir and os.path.exists(logo_dir):
-        # Try to add logos to legend
-        new_handles = []
-        for handle, label in zip(handles, labels):
-            logo_path = MODEL_LOGOS.get(label, "")
-            if logo_path:
-                full_path = os.path.join(logo_dir, logo_path.replace("logos/", ""))
-                if os.path.exists(full_path):
-                    try:
-                        # Create custom handle with logo
-                        img = plt.imread(full_path)
-                        # Keep original handle properties but add logo somehow
-                        # For now, just use the regular handle
-                        new_handles.append(handle)
-                    except:
-                        new_handles.append(handle)
-                else:
-                    new_handles.append(handle)
-            else:
-                new_handles.append(handle)
-        handles = new_handles
-    
+def _create_premium_legend(fig, handles, labels):
+    """Create a premium-looking legend with better styling"""
     legend = fig.legend(handles, labels, **LEGEND_KW)
-    # Enhance legend appearance
+    
+    # Style the legend text
     for text in legend.get_texts():
-        text.set_fontweight('medium')
+        text.set_fontweight(500)
+        text.set_fontsize(11)
+    
+    # Add subtle shadow to legend box
+    legend.get_frame().set_linewidth(0)
+    legend.get_frame().set_facecolor('white')
+    legend.get_frame().set_alpha(0.95)
+    
     return legend
 
 def _plot_overlay_per_family(
@@ -294,37 +279,42 @@ def _plot_overlay_per_family(
     if n == 0:
         return
 
-    # layout: 1xN (wide) or 2x3 if N==5
+    # Layout with adjusted spacing
     if n == 5:
-        nrows, ncols, figsize = 1, 5, (20, 5)
+        nrows, ncols, figsize = 1, 5, (22, 5.5)
     elif n <= 3:
-        nrows, ncols, figsize = 1, n, (7*n, 5)
+        nrows, ncols, figsize = 1, n, (8*n, 5.5)
     else:
-        nrows, ncols, figsize = 2, math.ceil(n/2), (7*ncols, 10)
+        nrows, ncols, figsize = 2, math.ceil(n/2), (8*ncols, 11)
 
     fig, axs = _prep_family_axes(ncols=ncols, nrows=nrows, figsize=figsize)
     axs = axs.flatten()
 
     model_list = sorted(models.keys())
+    
     for i, fam in enumerate(fams):
         ax = axs[i]
         fam_pretty = FAMILY_PRETTY.get(fam, fam)
         
-        # Enhanced bands with metric-specific styling
+        # Add gradient background
+        _add_gradient_background(ax)
+        
+        # Add subtle guidance bands based on metric
         if metric == "gain":
-            _band(ax, 1.0, 1.2)  # light band above unity
-            _band(ax, 0.8, 1.0)  # and below
+            _add_subtle_band(ax, 0.9, 1.1, "#E8F4FD", 0.15)
         elif metric == "phase_deg":
-            _band(ax, -10, 10)
+            _add_subtle_band(ax, -5, 5, "#FFF4E6", 0.12)
         elif metric == "r2_model":
-            _band(ax, 0.9, 1.0)
+            _add_subtle_band(ax, 0.95, 1.0, "#E8F5E9", 0.15)
+        elif metric == "res_acf1":
+            _add_subtle_band(ax, -0.1, 0.1, "#FCE4EC", 0.10)
 
         marker_i = 0
         for k, model in enumerate(model_list):
             dfm = fam_to_models.get(fam, {}).get(model, None)
             if dfm is None or dfm.empty:
                 continue
-            # group by frequency to get mean ± sem of the metric
+            
             g = dfm.groupby("frequency_cycles")[metric]
             xs = g.mean().index.to_numpy(dtype=float)
             ys = g.mean().to_numpy(dtype=float)
@@ -333,66 +323,95 @@ def _plot_overlay_per_family(
             color = COLORS[marker_i % len(COLORS)]
             marker = MARKERS[marker_i % len(MARKERS)]
             
-            # Enhanced line and marker styling
-            ax.plot(xs, ys,
+            # Main line with enhanced styling
+            line = ax.plot(xs, ys,
                     marker=marker,
                     color=color,
                     linewidth=LINEWIDTH,
                     markersize=MS,
                     markeredgewidth=MARKER_EDGE_WIDTH,
                     markeredgecolor=MARKER_EDGE_COLOR,
+                    markerfacecolor=color,
                     label=model,
-                    alpha=0.9,
-                    zorder=10 + marker_i)
+                    alpha=0.95,
+                    zorder=20 + marker_i,
+                    solid_capstyle='round',
+                    solid_joinstyle='round')
             
-            # Enhanced error bands with gradient
-            ax.fill_between(xs, ys-es, ys+es, 
+            # Add subtle line glow effect
+            ax.plot(xs, ys,
+                   color=color,
+                   linewidth=LINEWIDTH + 3,
+                   alpha=0.15,
+                   zorder=19 + marker_i)
+            
+            # Error bands with gradient effect
+            ax.fill_between(xs, ys-es, ys+es,
                           color=color,
-                          alpha=0.15,
-                          zorder=5 + marker_i,
-                          edgecolor='none')
+                          alpha=0.12,
+                          zorder=10 + marker_i,
+                          edgecolor='none',
+                          interpolate=True)
+            
             marker_i += 1
 
+        # Reference line if specified
         if hline is not None:
-            ax.axhline(hline, color="#666666", linestyle="--", linewidth=1.5, 
-                      alpha=0.6, zorder=2, label='_nolegend_')
+            ax.axhline(hline, color="#B0B0B0", linestyle="--", 
+                      linewidth=1.2, alpha=0.5, zorder=5, label='_nolegend_')
 
-        # Enhanced title and labels
-        ax.set_title(fam_pretty, pad=10, fontweight='bold')
-        ax.set_xlabel("Frequency (cycles / 64 steps)", fontweight='medium')
-        ax.set_ylabel(ylabel, fontweight='medium')
+        # Enhanced title styling
+        ax.set_title(fam_pretty, pad=12, fontsize=14, fontweight=600, color="#2C3E50")
         
-        # Clean up axes
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['left'].set_linewidth(1.2)
-        ax.spines['bottom'].set_linewidth(1.2)
+        # Axis labels with better typography
+        ax.set_xlabel("Frequency (cycles / 64 steps)", fontsize=11, fontweight=500, color="#546E7A")
+        ax.set_ylabel(ylabel, fontsize=11, fontweight=500, color="#546E7A")
+        
+        # Grid styling
+        ax.grid(True, alpha=0.08, linewidth=0.5, color='#E0E0E0')
+        ax.set_axisbelow(True)
+        
+        # Remove all spines for cleaner look
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        
+        # Style tick labels
+        ax.tick_params(axis='both', which='major', labelsize=10, colors='#607D8B', 
+                      length=0, pad=8)
         
         if ylim:
             ax.set_ylim(*ylim)
+        
         if as_integer_xticks:
             xt = sorted(dfm["frequency_cycles"].dropna().unique()) if dfm is not None else [1,2,4,8,16]
             ax.set_xticks(list(map(int, xt)))
-            ax.tick_params(axis='both', which='major', labelsize=10, width=1.2)
+            ax.set_xticklabels(list(map(str, map(int, xt))), fontweight=500)
 
-    # Enhanced global legend
+    # Hide unused subplots
+    for j in range(n, len(axs)):
+        axs[j].set_visible(False)
+
+    # Premium legend
     handles, labels = axs[0].get_legend_handles_labels()
     if len(handles):
-        _create_legend_with_logos(fig, handles, labels, logo_dir)
+        _create_premium_legend(fig, handles, labels)
 
+    # Title with enhanced styling
     if title_suffix:
-        fig.suptitle(title_suffix, y=1.02, fontsize=16, fontweight='bold')
-    
+        fig.suptitle(title_suffix, y=1.03, fontsize=17, fontweight=600, color="#1A237E")
+
     plt.tight_layout()
+    
     if out_path:
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        plt.savefig(out_path, bbox_inches="tight", facecolor='white', edgecolor='none')
+        plt.savefig(out_path, bbox_inches="tight", facecolor='#FAFAFA', 
+                   edgecolor='none', pad_inches=0.3)
     plt.close(fig)
 
 # --------------------------- Appendix helpers ---------------------------
 
 def _midband_table(models: Dict[str, pd.DataFrame], out_path: str):
-    """Save a compact mid-band (freq 4&8) table image with mean |G-1| and |phi|."""
+    """Save a premium-styled mid-band table"""
     rows = []
     for model, df in models.items():
         df2 = df[df["frequency_cycles"].isin([4,8])].copy()
@@ -409,27 +428,26 @@ def _midband_table(models: Dict[str, pd.DataFrame], out_path: str):
             })
     if not rows:
         return
+    
     tb = pd.DataFrame(rows)
     tb = tb.pivot(index="Family", columns="Model", values="|G-1| (mid)").round(3).sort_index()
     tb2 = pd.DataFrame(rows).pivot(index="Family", columns="Model", values="|Phase| deg (mid)").round(2).sort_index()
 
-    # Enhanced table rendering
-    fig, axs = plt.subplots(2, 1, figsize=(min(14, 5 + 1.2*len(tb.columns)), 6.5))
-    fig.patch.set_facecolor('white')
-    
+    fig, axs = plt.subplots(2, 1, figsize=(min(15, 6 + 1.3*len(tb.columns)), 7))
+    fig.patch.set_facecolor('#FAFAFA')
+
     for ax, title, data in zip(
         axs,
-        ["Mean |G-1| (Frequencies 4 & 8)", "Mean |Phase| (degrees) (Frequencies 4 & 8)"],
+        ["Mean |G−1| at Mid-Frequencies (4 & 8 cycles)", 
+         "Mean |Phase Error| at Mid-Frequencies (4 & 8 cycles)"],
         [tb, tb2]
     ):
         ax.axis("off")
         
-        # Create table with enhanced styling
+        # Create gradient-styled cells
         cell_colors = []
         for _ in range(len(data.index)):
-            row_colors = []
-            for _ in range(len(data.columns)):
-                row_colors.append('#f9f9f9')
+            row_colors = ['#FFFFFF'] * len(data.columns)
             cell_colors.append(row_colors)
         
         tbl = ax.table(cellText=data.values,
@@ -438,30 +456,32 @@ def _midband_table(models: Dict[str, pd.DataFrame], out_path: str):
                        cellLoc="center",
                        loc="center",
                        cellColours=cell_colors,
-                       colColours=['#e8e8e8'] * len(data.columns),
-                       rowColours=['#e8e8e8'] * len(data.index))
+                       colColours=['#E3F2FD'] * len(data.columns),
+                       rowColours=['#E3F2FD'] * len(data.index))
         
         tbl.auto_set_font_size(False)
-        tbl.set_fontsize(10)
-        tbl.scale(1.2, 1.5)
+        tbl.set_fontsize(11)
+        tbl.scale(1.3, 1.8)
         
-        # Style the table
+        # Premium table styling
         for (i, j), cell in tbl.get_celld().items():
-            cell.set_edgecolor('#cccccc')
+            cell.set_edgecolor('#E0E0E0')
             cell.set_linewidth(0.5)
             if i == 0 or j == -1:
-                cell.set_text_props(weight='bold')
-                cell.set_facecolor('#e0e0e0')
+                cell.set_text_props(weight=600, color='#1A237E')
+                cell.set_facecolor('#E3F2FD')
+            else:
+                cell.set_text_props(weight=400)
         
-        ax.set_title(title, pad=15, fontsize=13, fontweight='bold')
-    
+        ax.set_title(title, pad=20, fontsize=14, fontweight=600, color='#1A237E')
+
     plt.tight_layout()
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    plt.savefig(out_path, bbox_inches="tight", facecolor='white', edgecolor='none')
+    plt.savefig(out_path, bbox_inches="tight", facecolor='#FAFAFA', edgecolor='none')
     plt.close(fig)
 
 def _compliance_panels(models: Dict[str, pd.DataFrame], out_path: str):
-    # Enhanced bar chart styling
+    """Create premium bar charts for compliance rates"""
     fams = [f for f, _ in _family_iter()]
     model_list = sorted(models.keys())
     vals = np.full((len(fams), len(model_list)), np.nan)
@@ -475,47 +495,62 @@ def _compliance_panels(models: Dict[str, pd.DataFrame], out_path: str):
             if not sub.empty:
                 vals[i, j] = sub.mean()
 
-    fig, axs = plt.subplots(1, len(fams), figsize=(20, 5), sharey=True)
-    fig.patch.set_facecolor('white')
+    fig, axs = plt.subplots(1, len(fams), figsize=(22, 5.5), sharey=True)
+    fig.patch.set_facecolor('#FAFAFA')
     
     if len(fams) == 1:
         axs = [axs]
+    
     x = np.arange(len(model_list))
 
     for i, (fam, ax) in enumerate(zip(fams, axs)):
+        _add_gradient_background(ax)
+        
         for j, model in enumerate(model_list):
             v = vals[i, j]
             if not np.isfinite(v):
                 continue
+            
             color = COLORS[j % len(COLORS)]
-            ax.bar(j, v, width=0.7, color=color, alpha=0.8, 
-                  edgecolor='white', linewidth=2)
+            
+            # Main bar with gradient effect
+            bar = ax.bar(j, v, width=0.65, color=color, alpha=0.85,
+                        edgecolor='white', linewidth=2.5, zorder=10)
+            
+            # Add glow effect
+            ax.bar(j, v, width=0.68, color=color, alpha=0.2, 
+                  edgecolor='none', zorder=5)
+            
+            # Value label on top
+            if v > 0:
+                ax.text(j, v + 0.02, f'{v:.0%}', ha='center', va='bottom',
+                       fontsize=10, fontweight=600, color=color)
         
-        ax.set_title(FAMILY_PRETTY.get(fam, fam), fontweight='bold', pad=10)
+        ax.set_title(FAMILY_PRETTY.get(fam, fam), fontweight=600, pad=12, 
+                    fontsize=13, color='#2C3E50')
         ax.set_xticks(x)
-        ax.set_xticklabels(model_list, rotation=35, ha="right", fontweight='medium')
-        ax.set_ylim(0, 1.05)
-        ax.set_ylabel("Compliance Rate", fontweight='medium')
+        ax.set_xticklabels(model_list, rotation=30, ha="right", fontweight=500, 
+                          fontsize=10, color='#546E7A')
+        ax.set_ylim(0, 1.08)
+        ax.set_ylabel("Compliance Rate" if i == 0 else "", fontweight=500, 
+                     fontsize=11, color='#546E7A')
         
-        # Clean up axes
+        # Clean styling
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-        ax.grid(True, alpha=0.2, axis='y')
-        
-        # Add percentage labels on bars
-        for j, model in enumerate(model_list):
-            v = vals[i, j]
-            if np.isfinite(v):
-                ax.text(j, v + 0.02, f'{v:.1%}', ha='center', va='bottom', 
-                       fontsize=9, fontweight='medium')
+        ax.spines['left'].set_visible(False)
+        ax.spines['bottom'].set_visible(False)
+        ax.grid(True, alpha=0.08, axis='y', linewidth=0.5)
+        ax.set_axisbelow(True)
+        ax.tick_params(axis='both', length=0, pad=8, colors='#607D8B')
 
     plt.tight_layout()
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    plt.savefig(out_path, bbox_inches="tight", facecolor='white', edgecolor='none')
+    plt.savefig(out_path, bbox_inches="tight", facecolor='#FAFAFA', edgecolor='none')
     plt.close(fig)
 
-def _overlay_metric(models: Dict[str, pd.DataFrame], metric: str, ylabel: str, out_path: str, 
-                   hline=None, ylim=None, logo_dir=None):
+def _overlay_metric(models: Dict[str, pd.DataFrame], metric: str, ylabel: str, 
+                   out_path: str, hline=None, ylim=None, logo_dir=None):
     _plot_overlay_per_family(
         models=models, metric=metric, ylabel=ylabel,
         hline=hline, ylim=ylim, out_path=out_path,
@@ -555,20 +590,34 @@ def main():
         logo_dir=args.logo_dir,
     )
 
-    # 2) Phase Error vs Frequency (only diagnostic families)
+    # 2) Phase Error vs Frequency (ALL families)
     _plot_overlay_per_family(
         models=models,
         metric="phase_deg",
         ylabel="Phase Error (deg)",
         hline=0.0,
         ylim=None,
-        out_path=os.path.join(out_main, "fig2_phase_error_exponential_and_system.png"),
+        out_path=os.path.join(out_main, "fig2_phase_error_vs_frequency.png"),
         title_suffix="Phase Error vs Frequency",
-        panel_subset=["exponential_interest", "linear_system"],
+        panel_subset=None,
         logo_dir=args.logo_dir,
     )
 
-    # 3) R² vs Frequency (all families)
+    # 3) Residual ACF(1) vs Frequency (ALL families)
+    if any("res_acf1" in df.columns for df in models.values()):
+        _plot_overlay_per_family(
+            models=models,
+            metric="res_acf1",
+            ylabel="Residual ACF(1)",
+            hline=0.0,
+            ylim=None,
+            out_path=os.path.join(out_main, "fig3_residual_acf1_vs_frequency.png"),
+            title_suffix="Residual Autocorrelation vs Frequency",
+            panel_subset=None,
+            logo_dir=args.logo_dir,
+        )
+
+    # 4) R² vs Frequency (all families)
     if any("r2_model" in df.columns for df in models.values()):
         _plot_overlay_per_family(
             models=models,
@@ -576,14 +625,14 @@ def main():
             ylabel="Fit Quality (R²)",
             hline=1.0,
             ylim=(0.0, 1.02),
-            out_path=os.path.join(out_main, "fig3_r2_vs_frequency.png"),
-            title_suffix="Fit Quality vs Frequency",
+            out_path=os.path.join(out_main, "fig4_r2_vs_frequency.png"),
+            title_suffix="Model Fit Quality vs Frequency",
             logo_dir=args.logo_dir,
         )
 
     # ------------------ APPENDIX ------------------
 
-    # A1) Mid-band summary table image
+    # A1) Mid-band summary table
     _midband_table(models, os.path.join(out_appx, "tabA1_midband_summary.png"))
 
     # A2) Compliance bars per family
@@ -591,37 +640,35 @@ def main():
         _compliance_panels(models, os.path.join(out_appx, "figA2_compliance_by_family.png"))
 
     # A3) Nonlinearity proxy (H2/H1)
-    if any(("h2_over_h1" in df.columns) or ("h2_over_h1_model" in df.columns) for df in models.values()):
-        # ensure unified column name
-        models_h = {m: (d.rename(columns={"h2_over_h1_model": "h2_over_h1"}) if "h2_over_h1_model" in d.columns else d)
-                    for m, d in models.items()}
-        _overlay_metric(models_h, "h2_over_h1", "H2 / H1", 
-                       os.path.join(out_appx, "figA3_h2_over_h1_vs_frequency.png"),
-                       logo_dir=args.logo_dir)
+    if any("h2_over_h1" in df.columns for df in models.values()):
+        _overlay_metric(models, "h2_over_h1", "H₂/H₁ Ratio",
+                        os.path.join(out_appx, "figA3_h2_over_h1_vs_frequency.png"),
+                        logo_dir=args.logo_dir)
 
-    # A4) Residual diagnostics
+    # A4) Residual RMS
     if any("res_rms_norm" in df.columns for df in models.values()):
-        _overlay_metric(models, "res_rms_norm", "Residual RMS (normalized)", 
-                       os.path.join(out_appx, "figA4_residual_rms.png"),
-                       logo_dir=args.logo_dir)
-    if any("res_acf1" in df.columns for df in models.values()):
-        _overlay_metric(models, "res_acf1", "Residual ACF(1)", 
-                       os.path.join(out_appx, "figA5_residual_acf1.png"),
-                       logo_dir=args.logo_dir)
+        _overlay_metric(models, "res_rms_norm", "Residual RMS (normalized)",
+                        os.path.join(out_appx, "figA4_residual_rms.png"),
+                        logo_dir=args.logo_dir)
 
-    # A6) (Optional) Geometry standalone: Gain & R² for Similar Triangles only
-    # Gain
+    # A5) Residual ACF(1) appendix version
+    if any("res_acf1" in df.columns for df in models.values()):
+        _overlay_metric(models, "res_acf1", "Residual ACF(1)",
+                        os.path.join(out_appx, "figA5_residual_acf1.png"),
+                        logo_dir=args.logo_dir)
+
+    # A6) Geometry-only focus
     _plot_overlay_per_family(
         models=models,
         metric="gain",
         ylabel="Gain",
         hline=1.0,
         out_path=os.path.join(out_appx, "figA6_geometry_gain.png"),
-        title_suffix="Similar Triangles • Gain",
+        title_suffix="Similar Triangles • Gain Analysis",
         panel_subset=["similar_triangles"],
         logo_dir=args.logo_dir,
     )
-    # R²
+    
     if any("r2_model" in df.columns for df in models.values()):
         _plot_overlay_per_family(
             models=models,
@@ -630,7 +677,7 @@ def main():
             hline=1.0,
             ylim=(0.98, 1.001),
             out_path=os.path.join(out_appx, "figA6_geometry_r2.png"),
-            title_suffix="Similar Triangles • Fit Quality",
+            title_suffix="Similar Triangles • Fit Quality Analysis",
             panel_subset=["similar_triangles"],
             logo_dir=args.logo_dir,
         )
