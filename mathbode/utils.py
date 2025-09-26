@@ -1,4 +1,5 @@
 import re, time
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 
 def call_with_retries(client, prompt: str, retries: int = 3, backoff: float = 0.8) -> str:
     for i in range(max(0, int(retries))):
@@ -26,16 +27,16 @@ def _norm(s: str) -> str:
 
 # Exactly 6 decimals between tags; allow whitespace/newlines
 ANSWER_RE = re.compile(
-    rf"{re.escape(ANSWER_START)}\s*([+-]?\d+\.\d{{6}})\s*{re.escape(ANSWER_END)}",
-    flags=re.DOTALL  # allow newline between start/number/end
+    rf"{re.escape(ANSWER_START)}\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*{re.escape(ANSWER_END)}",
+    flags=re.DOTALL
 )
 
 def strict_rules() -> str:
     return (
-        f"You may reason a little, but you MUST end with exactly one final line:\n"
-        f"{ANSWER_START} -0.000000 {ANSWER_END}\n"
-        "The number must have exactly six digits after the decimal (no scientific notation). "
-        "No other text after the END tag."
+        f"Do not output anything except the numerical final answer, in the following format example \n"
+        f"{ANSWER_START} 1.204239 {ANSWER_END}\n"
+        "Show exactly six digits after the decimal (no scientific notation). "
+        "There should be no other text in this response other than the final answer and tags."
     )
 
 def build_prompt(raw_prompt: str) -> str:
@@ -45,15 +46,22 @@ def coerce_to_fixed_decimals(text: str, places: int = 6):
     if not text:
         return None, None
     text = _norm(text)
+
     last = None
     for m in ANSWER_RE.finditer(text):
         last = m
     if not last:
         return None, None
-    num_str = last.group(1)  # already exactly 6 decimals; NO rounding
+
+    raw = last.group(1).strip()
     try:
-        return num_str, float(num_str)
-    except Exception:
+        dec = Decimal(raw)  # handles "1", "3.2", ".5", "1e-3", etc.
+        quant = Decimal("0." + "0"*places)  # e.g., 0.000001
+        # Truncate (toward zero), not round:
+        dec_trunc = dec.quantize(quant, rounding=ROUND_DOWN)
+        fixed_str = format(dec_trunc, "f")  # exact decimal string with 6 places
+        return fixed_str, float(dec_trunc)
+    except (InvalidOperation, ValueError):
         return None, None
 
 def force_final_line(text_num: str, places: int = 6) -> str:

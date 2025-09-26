@@ -29,7 +29,7 @@ def run_inference(
     max_tokens: int = 32,
     api_base: Optional[str] = None,
     workers: int = 4,
-    provider_rps: float = 2.1
+    provider_rps: float = 5
 ) -> str:
     os.makedirs(outdir, exist_ok=True)
     tag=f"{provider}_{model}".replace("/","_")

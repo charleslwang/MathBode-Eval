@@ -23,6 +23,7 @@ wheels/
 # Project specific
 cache/
 results/
+summaries/
 
 # Virtual Environment
 venv/

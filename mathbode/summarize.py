@@ -56,6 +56,24 @@ def _fit_first_harmonic(t: np.ndarray, y: np.ndarray, omega: float) -> Optional[
     r2 = 1.0 - ss_res / ss_tot
     return dict(A=A, phi=phi, r2=r2)
 
+# NEW: small helper to get H1..HK amplitudes by least-squares projection
+def _harmonics(t: np.ndarray, y: np.ndarray, omega: float, K: int = 3) -> Dict[str, float]:
+    t = np.asarray(t, float)
+    y = np.asarray(y, float)
+    m = np.isfinite(y)
+    if m.sum() < 16:
+        return {}
+    out: Dict[str, float] = {}
+    for k in range(1, K + 1):
+        Xk = np.c_[np.sin(k * omega * t[m]), np.cos(k * omega * t[m])]
+        try:
+            beta, *_ = np.linalg.lstsq(Xk, y[m], rcond=None)
+        except Exception:
+            return {}
+        bs, bc = map(float, beta)
+        out[f"H{k}"] = float(np.hypot(bs, bc))
+    return out
+
 # ------------------------ Core summarize ------------------------
 
 def _summarize_all_rows(enriched: pd.DataFrame) -> pd.DataFrame:
@@ -110,6 +128,13 @@ def _summarize_all_rows(enriched: pd.DataFrame) -> pd.DataFrame:
                 "r2_model": float("nan"),
                 "compliance_rate": comp,
                 "steps_per_sweep": T,
+                # NEW: keep schema stable with NaNs for new fields
+                "h2_over_h1_model": float("nan"),
+                "h3_over_h1_model": float("nan"),
+                "nonlin_index_model": float("nan"),
+                "h2_over_h1_truth": float("nan"),
+                "res_rms_norm": float("nan"),
+                "res_acf1": float("nan"),
             }
             if has_amp:
                 out["amplitude_scale"] = keys[4]
@@ -120,6 +145,53 @@ def _summarize_all_rows(enriched: pd.DataFrame) -> pd.DataFrame:
 
         ft = _fit_first_harmonic(t, y_true, omega)
         fm = _fit_first_harmonic(t, y_model, omega)
+
+        # Prepare defaults for NEW metrics
+        h2_over_h1_model = float("nan")
+        h3_over_h1_model = float("nan")
+        nonlin_index_model = float("nan")
+        h2_over_h1_truth = float("nan")
+        res_rms_norm = float("nan")
+        res_acf1 = float("nan")
+
+        if ft and fm and (ft["A"] > 0):
+            # NEW: harmonic spectra (truth & model)
+            spec_t = _harmonics(t, y_true, omega, K=3)
+            spec_m = _harmonics(t, y_model, omega, K=3)
+            H1t = spec_t.get("H1", np.nan)
+            H2t = spec_t.get("H2", np.nan)
+            H1m = spec_m.get("H1", np.nan)
+            H2m = spec_m.get("H2", np.nan)
+            H3m = spec_m.get("H3", np.nan)
+
+            if np.isfinite(H1m) and H1m > 0 and np.isfinite(H2m):
+                h2_over_h1_model = float(H2m / H1m)
+            if np.isfinite(H1m) and H1m > 0 and np.isfinite(H3m):
+                h3_over_h1_model = float(H3m / H1m)
+
+            # NEW: simple nonlinearity index: 1 - fundamental energy / total (H1..H3)
+            if np.isfinite(H1m):
+                total_e = (H1m ** 2) + (0 if not np.isfinite(H2m) else H2m ** 2) + (0 if not np.isfinite(H3m) else H3m ** 2)
+                if total_e > 0:
+                    nonlin_index_model = float(1.0 - (H1m ** 2) / total_e)
+
+            if np.isfinite(H1t) and H1t > 0 and np.isfinite(H2t):
+                h2_over_h1_truth = float(H2t / H1t)
+
+            # NEW: residual metrics against first-harmonic *shape* (demeaned)
+            # Reconstruct the first-harmonic model (zero-mean) from (A,phi):
+            A_m = float(fm["A"])
+            phi_m = float(fm["phi"])
+            y_model_dm = y_model - np.nanmean(y_model[np.isfinite(y_model)])
+            yhat = A_m * np.sin(omega * t + phi_m)  # zero-mean harmonic approx
+            res = y_model_dm - yhat
+            res = res[np.isfinite(res)]
+            if res.size:
+                res_rms = float(np.sqrt(np.mean(res ** 2)))
+                res_rms_norm = float(res_rms / (float(ft["A"]) if ft["A"] > 0 else np.nan))
+                if res.size >= 3:
+                    # lag-1 autocorrelation
+                    res_acf1 = float(np.corrcoef(res[:-1], res[1:])[0, 1])
 
         if not ft or not fm or (ft["A"] <= 0):
             out = {
@@ -134,6 +206,13 @@ def _summarize_all_rows(enriched: pd.DataFrame) -> pd.DataFrame:
                 "r2_model": float("nan") if not fm else float(fm["r2"]),
                 "compliance_rate": comp,
                 "steps_per_sweep": T,
+                # NEW fields (NaN if unavailable)
+                "h2_over_h1_model": h2_over_h1_model,
+                "h3_over_h1_model": h3_over_h1_model,
+                "nonlin_index_model": nonlin_index_model,
+                "h2_over_h1_truth": h2_over_h1_truth,
+                "res_rms_norm": res_rms_norm,
+                "res_acf1": res_acf1,
             }
             if has_amp:
                 out["amplitude_scale"] = keys[4]
@@ -155,6 +234,13 @@ def _summarize_all_rows(enriched: pd.DataFrame) -> pd.DataFrame:
             "r2_model": float(fm["r2"]),
             "compliance_rate": comp,
             "steps_per_sweep": T,
+            # NEW metrics
+            "h2_over_h1_model": h2_over_h1_model,
+            "h3_over_h1_model": h3_over_h1_model,
+            "nonlin_index_model": nonlin_index_model,
+            "h2_over_h1_truth": h2_over_h1_truth,
+            "res_rms_norm": res_rms_norm,
+            "res_acf1": res_acf1,
         }
         if has_amp:
             out["amplitude_scale"] = keys[4]
@@ -166,6 +252,9 @@ def _summarize_all_rows(enriched: pd.DataFrame) -> pd.DataFrame:
         "gain", "phase_deg_model_minus_truth",
         "A_truth", "A_model", "r2_model",
         "compliance_rate", "steps_per_sweep",
+        # NEW columns in per-row table
+        "h2_over_h1_model", "h3_over_h1_model", "nonlin_index_model",
+        "h2_over_h1_truth", "res_rms_norm", "res_acf1",
     ]
     res = pd.DataFrame(rows)
     if res.empty:
@@ -186,7 +275,12 @@ def _summarize_means(all_rows: pd.DataFrame) -> pd.DataFrame:
         df = df.rename(columns={"phase_deg_model_minus_truth": "phase_err_deg"})  # <- no collision
 
     # Coerce numeric where present (guard if dup labels ever appear)
-    for c in ["gain", "phase_err_deg", "r2_model", "compliance_rate", "frequency_cycles"]:
+    for c in [
+        "gain", "phase_err_deg", "r2_model", "compliance_rate", "frequency_cycles",
+        # NEW aggregated fields:
+        "h2_over_h1_model", "h3_over_h1_model", "nonlin_index_model",
+        "h2_over_h1_truth", "res_rms_norm", "res_acf1",
+    ]:
         if c in df.columns:
             col = df[c]
             if isinstance(col, pd.DataFrame):  # duplicate labels safeguard
@@ -198,6 +292,13 @@ def _summarize_means(all_rows: pd.DataFrame) -> pd.DataFrame:
         "gain": "mean",
         "r2_model": "mean",
         "compliance_rate": "mean",
+        # NEW aggregated means:
+        "h2_over_h1_model": "mean",
+        "h3_over_h1_model": "mean",
+        "nonlin_index_model": "mean",
+        "h2_over_h1_truth": "mean",
+        "res_rms_norm": "mean",
+        "res_acf1": "mean",
     }
     if "phase_err_deg" in df.columns:
         agg["phase_err_deg"] = "mean"

@@ -10,11 +10,12 @@ export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH:-}"
 # =======================
 
 # Edit these to taste (comment out arrays to skip a provider)
-GEMINI_MODELS=("gemini-2.5-pro")                                 # e.g. ("gemini-2.5-flash")
+GEMINI_MODELS=()                                 # e.g. ("gemini-2.5-flash")
 ANTHROPIC_MODELS=()                              # e.g. ("claude-3-7-sonnet-20250219")
-TOGETHER_MODELS=("deepseek-ai/DeepSeek-V3.1")
-OPENAI_MODELS=("gpt-5")                                 # e.g. ("gpt-4o-mini")
-# "Qwen/Qwen3-235B-A22B-Instruct-2507-tput"
+TOGETHER_MODELS=("Qwen/Qwen3-235B-A22B-fp8-tput")
+# TOGETHER_MODELS=("deepseek-ai/DeepSeek-V3.1")
+# TOGETHER_MODELS=("meta-llama/Llama-4-Scout-17B-16E-Instruct")
+OPENAI_MODELS=()                                 # e.g. ("gpt-4o-mini")
 
 # Presets:
 #   SMOKE    : freqs {4,8}, phase {0},    K=2 base keys/family
@@ -26,7 +27,7 @@ CONFIG="${CONFIG:-MVP_PLUS}"              # override like: CONFIG=FULL ./run_mat
 OUTDIR="${OUTDIR:-results}"
 WORKERS="${WORKERS:-4}"
 TEMP="${TEMP:-0.0}"
-MAXTOK="${MAXTOK:-128}"
+MAXTOK=${MAXTOK:-1028}  # max tokens per response
 API_BASE="${API_BASE:-}"                  # optional OpenAI-compatible base URL
 SIGNAL="${SIGNAL:-sinusoid}"              # dataset drive type
 SWEEPS="${SWEEPS:-2}"                     # number of base keys per family; or "ALL"
@@ -240,15 +241,6 @@ export MB_TEMP="$TEMP"
 export MB_MAXTOK="$MAXTOK"
 export MB_API_BASE="$API_BASE"
 
-# Together
-if (( ${#TOGETHER_MODELS[@]} )); then
-  for m in "${TOGETHER_MODELS[@]}"; do
-    export MB_PROVIDER="together"
-    export MB_MODEL="$m"
-    run_one_model "together" "$m" "$OUTDIR" "$WORKERS" "$TEMP" "$MAXTOK" "" || true
-  done
-fi
-
 # Gemini
 if (( ${#GEMINI_MODELS[@]} )); then
   for m in "${GEMINI_MODELS[@]}"; do
@@ -258,21 +250,32 @@ if (( ${#GEMINI_MODELS[@]} )); then
   done
 fi
 
-# Anthropic
-if (( ${#ANTHROPIC_MODELS[@]} )); then
-  for m in "${ANTHROPIC_MODELS[@]}"; do
-    export MB_PROVIDER="anthropic"
-    export MB_MODEL="$m"
-    run_one_model "anthropic" "$m" "$OUTDIR" "$WORKERS" "$TEMP" "$MAXTOK" "" || true
-  done
-fi
-
 # OpenAI
 if (( ${#OPENAI_MODELS[@]} )); then
   for m in "${OPENAI_MODELS[@]}"; do
     export MB_PROVIDER="openai"
     export MB_MODEL="$m"
     run_one_model "openai" "$m" "$OUTDIR" "$WORKERS" "$TEMP" "$MAXTOK" "$API_BASE" || true
+  done
+fi
+
+
+
+# Together
+if (( ${#TOGETHER_MODELS[@]} )); then
+  for m in "${TOGETHER_MODELS[@]}"; do
+    export MB_PROVIDER="together"
+    export MB_MODEL="$m"
+    run_one_model "together" "$m" "$OUTDIR" "$WORKERS" "$TEMP" "$MAXTOK" "" || true
+  done
+fi
+
+# Anthropic
+if (( ${#ANTHROPIC_MODELS[@]} )); then
+  for m in "${ANTHROPIC_MODELS[@]}"; do
+    export MB_PROVIDER="anthropic"
+    export MB_MODEL="$m"
+    run_one_model "anthropic" "$m" "$OUTDIR" "$WORKERS" "$TEMP" "$MAXTOK" "" || true
   done
 fi
 

@@ -64,7 +64,7 @@ class TokenRateLimiter:
 # ---------- base client ----------
 
 class BaseClient:
-    def __init__(self, model: str, temperature: float = 0.0, max_tokens: int = 32):
+    def __init__(self, model: str, temperature: float = 0.0, max_tokens: int = 1028):
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -92,141 +92,192 @@ class BaseClient:
 # ---------- OpenAI ----------
 
 class OpenAIClient(BaseClient):
-    def __init__(self, model, temperature=0.0, max_tokens=32, api_base: Optional[str] = None):
+    def __init__(self, model, temperature=0.0, max_tokens=1028, api_base: Optional[str] = None):
         super().__init__(model, temperature, max_tokens)
         from openai import OpenAI
         key = os.getenv("OPENAI_API_KEY", "")
         if not key:
             raise RuntimeError("Missing OPENAI_API_KEY")
         self.client = OpenAI(api_key=key, base_url=api_base) if api_base else OpenAI(api_key=key)
-        # token limit only (per user spec)
-        tpm = int(os.getenv("OPENAI_TPM", "20000"))
-        self._rl_tok = TokenRateLimiter(tpm)
+        # Simple TPM limiter (OpenAI docs recommend minding TPM/RPM)
+        self._rl_tok = TokenRateLimiter(int(os.getenv("OPENAI_TPM", "20000")))
 
     def generate(self, prompt: str) -> str:
         self.total += 1
-
-        # acquire TPM capacity conservatively: prompt_est + max_tokens
         if self._rl_tok:
-            est_in = _est_tokens_from_text(prompt)
-            self._rl_tok.acquire(est_in + int(self.max_tokens))
+            # best-effort: prompt tokens + output cap
+            self._rl_tok.acquire(_est_tokens_from_text(prompt) + int(self.max_tokens))
 
         try:
-            if hasattr(self, "_rl_req") and self._rl_req:
-                self._rl_req.wait()
-
+            msgs = [
+                {"role": "system", "content": strict_rules()},
+                {"role": "user",   "content": prompt},
+            ]
             resp = self.client.chat.completions.create(
                 model=self.model,
-                temperature=float(self.temperature),       # 0.0 recommended
-                max_tokens=int(self.max_tokens),           # 24 is a good starting point
-                messages=[
-                    {"role": "system", "content": strict_rules()},
-                    {"role": "user", "content": "Example: 2+3"},
-                    {"role": "assistant", "content": f"{ANSWER_START} 5.000000 {ANSWER_END}"},
-                    {"role": "user", "content": prompt},   # prompt = just the problem text
-                ],
-                stop=[ANSWER_END],                         # <— key: stop exactly at END tag
-                top_p=1.0,
+                messages=msgs,
+                temperature=float(self.temperature),
+                max_tokens=int(self.max_tokens),  # classic param name for chat.completions
+                stop=[ANSWER_END],                # hard stop at your sentinel
             )
 
             out = (resp.choices[0].message.content or "").strip()
+            if out and not out.endswith(ANSWER_END):
+                out = f"{out} {ANSWER_END}"
 
-            # usage fields
+            # usage accounting (fallback to rough estimate)
             usage = getattr(resp, "usage", None)
-            in_tok = getattr(usage, "prompt_tokens", None) if usage else None
+            in_tok  = getattr(usage, "prompt_tokens", None)     if usage else None
             out_tok = getattr(usage, "completion_tokens", None) if usage else None
-
-            if in_tok is None:
-                in_tok = _est_tokens_from_text(prompt)
-            if out_tok is None:
-                out_tok = _est_tokens_from_text(out)
-
+            if in_tok  is None: in_tok  = _est_tokens_from_text(prompt)
+            if out_tok is None: out_tok = _est_tokens_from_text(out)
             self._add_tokens(in_tok, out_tok)
-            if self._rl_tok:
-                # record actual tokens (not planned)
-                self._rl_tok.record(in_tok + out_tok)
+            if self._rl_tok: self._rl_tok.record(in_tok + out_tok)
 
             if out:
                 self.ok += 1
             return out
         except Exception as e:
-            self.last_error = str(e)
-            # on failure, don't record tokens against TPM (service may not have counted it),
-            # but keep local prompt estimate in totals for transparency:
-            if self._rl_tok:
-                # nothing recorded to limiter (since request may not have consumed)
-                pass
+            self.last_error = f"{type(e).__name__}: {e}"
             self._add_tokens(_est_tokens_from_text(prompt), 0)
             return ""
 
-# ---------- Gemini ----------
+
+# ---------- Gemini (minimal, system+prompt, single call, hard stop) ----------
 
 class GeminiClient(BaseClient):
-    def __init__(self, model, temperature=0.0, max_tokens=32):
+    """
+    Uses the new Google GenAI SDK if available (`google.genai`), otherwise falls back
+    to the legacy `google.generativeai`. Both paths keep the same simple behavior:
+    - one system instruction (strict_rules)
+    - one user prompt
+    - stop at ANSWER_END
+    """
+    def __init__(self, model, temperature=0.0, max_tokens=1028):
         super().__init__(model, temperature, max_tokens)
-        import google.generativeai as genai
+
+        self._use_new_sdk = False
+        self._client = None
+        self._model_obj = None
+
         key = os.getenv("GOOGLE_API_KEY", "")
         if not key:
             raise RuntimeError("Missing GOOGLE_API_KEY")
-        genai.configure(api_key=key)
-        self.model_obj = genai.GenerativeModel(model_name=model)
-        rpm = int(os.getenv("GEMINI_RPM", "150"))
-        self._rl_req = RequestRateLimiter(rpm)
+
+        # Try the new Google GenAI SDK first (ai.google.dev)
+        try:
+            from google import genai as new_genai
+            from google.genai.types import GenerateContentConfig
+            self._use_new_sdk = True
+            self._new = {
+                "genai": new_genai,
+                "GenerateContentConfig": GenerateContentConfig,
+            }
+            # New SDK uses a client object
+            self._client = new_genai.Client()
+        except Exception:
+            # Fallback to legacy google.generativeai
+            import google.generativeai as genai
+            genai.configure(api_key=key)
+            self._legacy = {"genai": genai}
+            # Pre-bind system instruction at model construction (supported by legacy SDK)
+            self._model_obj = genai.GenerativeModel(
+                model_name=model,
+                system_instruction=strict_rules()
+            )
+
+        # Lightweight RPM limiter to avoid 429s
+        self._rl_req = RequestRateLimiter(int(os.getenv("GEMINI_RPM", "150")))
+        self._api_key = key
+        self._model = model
+
+    def _extract_text_legacy(self, resp) -> str:
+        # Legacy SDK sometimes lacks .text if MAX_TOKENS or empty candidates happen.
+        try:
+            t = getattr(resp, "text", None)
+            if t: return t
+        except Exception:
+            pass
+        # Fallback: fish into candidates/parts
+        try:
+            cands = getattr(resp, "candidates", None) or []
+            if cands and getattr(cands[0], "content", None):
+                parts = getattr(cands[0].content, "parts", None) or []
+                if parts and getattr(parts[0], "text", None):
+                    return parts[0].text
+        except Exception:
+            pass
+        return ""
 
     def generate(self, prompt: str) -> str:
+        from mathbode.utils import strict_rules, ANSWER_END
         self.total += 1
+
         try:
             if self._rl_req:
                 self._rl_req.wait()
 
-            resp = self.model_obj.generate_content(
-                [{"role":"user","parts":[ "Example: 2+3" ]},
-                {"role":"model","parts":[ f"{ANSWER_START} 5.000000 {ANSWER_END}" ]},
-                {"role":"user","parts":[ prompt ]}],
-                system_instruction=strict_rules(),
-                generation_config={
-                    "temperature": float(self.temperature),
-                    "max_output_tokens": int(self.max_tokens),
-                    "stop_sequences": [ANSWER_END],       # <— stop at END tag
-                    "top_p": 1.0,
-                },
-            )
+            if self._use_new_sdk:
+                # New Google GenAI SDK path
+                from google.genai.types import GenerateContentConfig
+                cfg = GenerateContentConfig(
+                    system_instruction=[strict_rules()],
+                    temperature=float(self.temperature),
+                    max_output_tokens=int(self.max_tokens),
+                    stop_sequences=[ANSWER_END],
+                )
+                resp = self._client.models.generate_content(
+                    model=self._model,
+                    contents=prompt,
+                    config=cfg,
+                )
+                # New SDK exposes .text (method or property depending on version)
+                out = ""
+                try:
+                    out = resp.text if isinstance(getattr(resp, "text", None), str) else resp.text()
+                except Exception:
+                    # Fallback: unified accessor
+                    try:
+                        out = resp.text
+                    except Exception:
+                        out = ""
+            else:
+                # Legacy google.generativeai path
+                # Minimal call: we already set system_instruction on the model object
+                resp = self._model_obj.generate_content(
+                    prompt,
+                    generation_config={
+                        "temperature": float(self.temperature),
+                        "max_output_tokens": int(self.max_tokens),
+                        "stop_sequences": [ANSWER_END],
+                    },
+                    # Keep safety defaults; fewer surprises across models
+                )
+                out = self._extract_text_legacy(resp)
 
-            # Extract text robustly
-            text = getattr(resp, "text", None)
-            if not text and getattr(resp, "candidates", None):
-                cand = resp.candidates[0]
-                parts = getattr(getattr(cand, "content", {}), "parts", []) or getattr(cand, "content", {}).get("parts", [])
-                text = "".join(getattr(p, "text", "") for p in parts)
-            out = (text or "").strip()
+            out = (out or "").strip()
+            if out and not out.endswith(ANSWER_END):
+                out = f"{out}{ANSWER_END}"
 
-            # usage
-            um = getattr(resp, "usage_metadata", None)
-            in_tok = getattr(um, "prompt_token_count", None) if um else None
-            out_tok = getattr(um, "candidates_token_count", None) if um else None
-            total_tok = getattr(um, "total_token_count", None) if um else None
-            if out_tok is None and (in_tok is not None and total_tok is not None):
-                out_tok = max(0, int(total_tok) - int(in_tok))
-
-            if in_tok is None:
-                in_tok = _est_tokens_from_text(prompt)
-            if out_tok is None:
-                out_tok = _est_tokens_from_text(out)
-
+            # Gemini SDKs don't consistently report token usage → best-effort estimate
+            in_tok  = _est_tokens_from_text(prompt)
+            out_tok = _est_tokens_from_text(out)
             self._add_tokens(in_tok, out_tok)
 
             if out:
                 self.ok += 1
             return out
+
         except Exception as e:
-            self.last_error = str(e)
+            self.last_error = f"{type(e).__name__}: {e}"
             self._add_tokens(_est_tokens_from_text(prompt), 0)
             return ""
+
 
 # ---------- Anthropic ----------
 
 class AnthropicClient(BaseClient):
-    def __init__(self, model, temperature=0.0, max_tokens=64):
+    def __init__(self, model, temperature=0.0, max_tokens=512):
         super().__init__(model, temperature, max_tokens)
         from anthropic import Anthropic
         key = os.getenv("ANTHROPIC_API_KEY", "")
@@ -286,7 +337,7 @@ class AnthropicClient(BaseClient):
 # ---------- Together ----------
 
 class TogetherClient(BaseClient):
-    def __init__(self, model, temperature=0.0, max_tokens=32, api_base: Optional[str] = None):
+    def __init__(self, model, temperature=0.0, max_tokens=1028, api_base: Optional[str] = None):
         super().__init__(model, temperature, max_tokens)
         from together import Together
         key = os.getenv("TOGETHER_API_KEY", "")
@@ -310,8 +361,8 @@ class TogetherClient(BaseClient):
                 max_tokens=int(self.max_tokens),           # 24 is a good starting point
                 messages=[
                     {"role": "system", "content": strict_rules()},
-                    {"role": "user", "content": "Example: 2+3"},
-                    {"role": "assistant", "content": f"{ANSWER_START} 5.000000 {ANSWER_END}"},
+                    {"role": "user", "content": "Example: 175/67"},
+                    {"role": "assistant", "content": f"{ANSWER_START} 2.611940 {ANSWER_END}"},
                     {"role": "user", "content": prompt},   # prompt = just the problem text
                 ],
                 stop=[ANSWER_END],                         # <— key: stop exactly at END tag
