@@ -12,7 +12,7 @@ export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH:-}"
 # Edit these to taste (comment out arrays to skip a provider)
 GEMINI_MODELS=()                                 # e.g. ("gemini-2.5-flash")
 ANTHROPIC_MODELS=()                              # e.g. ("claude-3-7-sonnet-20250219")
-TOGETHER_MODELS=("Qwen/Qwen3-235B-A22B-fp8-tput")
+TOGETHER_MODELS=("openai/gpt-oss-120b")
 # TOGETHER_MODELS=("deepseek-ai/DeepSeek-V3.1")
 # TOGETHER_MODELS=("meta-llama/Llama-4-Scout-17B-16E-Instruct")
 OPENAI_MODELS=()                                 # e.g. ("gpt-4o-mini")
