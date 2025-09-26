@@ -30,7 +30,7 @@ plt.rcParams.update({
     "xtick.labelsize": 11,
     "ytick.labelsize": 11,
     "axes.grid": True,
-    "grid.alpha": 0.08,
+    "grid.alpha": 0.03,
     "grid.linestyle": "-",
     "grid.linewidth": 0.5,
     "axes.spines.top": False,
