@@ -6,37 +6,79 @@ import os, glob, re, math
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from typing import Dict, List, Tuple
+import matplotlib.patches as mpatches
+from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+from typing import Dict, List, Tuple, Optional
+import warnings
+warnings.filterwarnings('ignore')
 
 # ----------------------------- Styling -----------------------------
 
+# Modern, clean aesthetic with better typography and colors
+plt.style.use('seaborn-v0_8-whitegrid')
 plt.rcParams.update({
-    "figure.dpi": 120,
-    "savefig.dpi": 220,
-    "font.size": 12,
-    "axes.titlesize": 16,
-    "axes.labelsize": 12,
-    "legend.fontsize": 11,
-    "xtick.labelsize": 11,
-    "ytick.labelsize": 11,
+    "figure.dpi": 150,
+    "savefig.dpi": 300,
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+    "font.size": 11,
+    "axes.titlesize": 14,
+    "axes.titleweight": "bold",
+    "axes.labelsize": 11,
+    "axes.labelweight": "medium",
+    "legend.fontsize": 10,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
     "axes.grid": True,
-    "grid.alpha": 0.25,
-    "grid.linestyle": "-",
+    "grid.alpha": 0.15,
+    "grid.linestyle": "--",
+    "grid.linewidth": 0.8,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.linewidth": 1.2,
+    "axes.edgecolor": "#333333",
+    "figure.facecolor": "white",
+    "axes.facecolor": "white",
 })
 
-MARKERS = ["o", "s", "D", "^", "v", "P", "X"]
-LINEWIDTH = 2.0
-MS = 5.5
+# Professional color palette with better contrast
+COLORS = [
+    "#2E86AB",  # Deep blue
+    "#A23B72",  # Rose
+    "#F18F01",  # Orange
+    "#C73E1D",  # Red
+    "#6A994E",  # Green
+    "#8338EC",  # Purple
+    "#FB5607",  # Bright orange
+    "#3A86FF",  # Bright blue
+]
 
-# legend position (outside, centered below)
+MARKERS = ["o", "s", "D", "^", "v", "P", "X", "*", "h"]
+LINEWIDTH = 2.2
+MS = 7
+MARKER_EDGE_WIDTH = 1.5
+MARKER_EDGE_COLOR = "white"
+
+# Enhanced legend styling
 LEGEND_KW = dict(
     loc="upper center",
-    bbox_to_anchor=(0.5, -0.12),
+    bbox_to_anchor=(0.5, -0.15),
     ncol=3,
-    frameon=False,
+    frameon=True,
+    fancybox=True,
+    shadow=True,
+    borderpad=1,
+    columnspacing=2,
+    handlelength=2.5,
+    facecolor="white",
+    edgecolor="#cccccc",
+    framealpha=0.95,
 )
 
-BAND_FACE = "#f2f2f2"  # light band fill
+# Subtle band colors with gradients
+BAND_FACE = "#f7f7f7"
+BAND_EDGE = "#e0e0e0"
+BAND_ALPHA = 0.6
 
 # Families in the desired order
 FAMILY_ORDER = [
@@ -58,12 +100,21 @@ FAMILY_PRETTY = {
 
 MODEL_PRETTY_OVERRIDES = {
     r"openai.*gpt[-_]?4o": "GPT-4o",
-    r"meta.*llama.*guard|llama.*scout.*guard": "Llama 4 Guard",
     r"meta.*llama.*": "Llama 4 Instruct",
     r"deepseek.*v3\.?1": "DeepSeek V3.1",
     r"mistral.*mixtral.*8x7b": "Mixtral 8×7B",
-    r"qwen.*235b.*a22b.*instruct": "Qwen3 235B (Instruct)",
+    r"qwen.*235b.*a22b.*instruct": "Qwen3 235B Instruct",
     r"qwen.*": "Qwen3",
+}
+
+# Model to logo mapping (logos should be in logos/ directory)
+MODEL_LOGOS = {
+    "GPT-4o": "logos/oai.png",
+    "Llama 4 Instruct": "logos/meta.png",
+    "DeepSeek V3.1": "logos/deepseek.png",
+    "Mixtral 8×7B": "logos/mixtral.png",
+    "Qwen3 235B Instruct": "logos/qwen.png",
+    "Qwen3": "logos/qwen.png",
 }
 
 # -------------------------- IO + Harmonization --------------------------
@@ -157,11 +208,24 @@ def _safe_sem(x: pd.Series) -> float:
     return float(x.std(ddof=1) / max(np.sqrt(len(x)), 1.0))
 
 def _band(ax, y0, y1):
-    ax.axhspan(y0, y1, color=BAND_FACE, zorder=0)
+    """Create a subtle gradient band for visual guidance"""
+    # Create gradient effect with multiple alpha levels
+    n_bands = 3
+    alphas = np.linspace(BAND_ALPHA * 0.3, BAND_ALPHA, n_bands)
+    y_range = y1 - y0
+    for i, alpha in enumerate(alphas):
+        y_start = y0 + (i * y_range / n_bands)
+        y_end = y0 + ((i + 1) * y_range / n_bands)
+        ax.axhspan(y_start, y_end, color=BAND_FACE, alpha=alpha, zorder=0, linewidth=0)
+    # Add subtle edge lines
+    ax.axhline(y0, color=BAND_EDGE, linewidth=0.5, alpha=0.3, zorder=1)
+    ax.axhline(y1, color=BAND_EDGE, linewidth=0.5, alpha=0.3, zorder=1)
 
 def _prep_family_axes(ncols: int, nrows: int = 1, figsize=(15, 4.2)):
     fig, axs = plt.subplots(nrows, ncols, figsize=figsize, sharex=False, sharey=False)
     axs = np.array(axs).reshape(nrows, ncols)
+    # Add subtle background
+    fig.patch.set_facecolor('white')
     return fig, axs
 
 def _family_iter():
@@ -182,6 +246,36 @@ def _collect_by_family(models: Dict[str, pd.DataFrame], metric: str) -> Dict[str
             out[fam][model] = sub
     return out
 
+def _create_legend_with_logos(fig, handles, labels, logo_dir: Optional[str] = None):
+    """Create enhanced legend with optional model provider logos"""
+    if logo_dir and os.path.exists(logo_dir):
+        # Try to add logos to legend
+        new_handles = []
+        for handle, label in zip(handles, labels):
+            logo_path = MODEL_LOGOS.get(label, "")
+            if logo_path:
+                full_path = os.path.join(logo_dir, logo_path.replace("logos/", ""))
+                if os.path.exists(full_path):
+                    try:
+                        # Create custom handle with logo
+                        img = plt.imread(full_path)
+                        # Keep original handle properties but add logo somehow
+                        # For now, just use the regular handle
+                        new_handles.append(handle)
+                    except:
+                        new_handles.append(handle)
+                else:
+                    new_handles.append(handle)
+            else:
+                new_handles.append(handle)
+        handles = new_handles
+    
+    legend = fig.legend(handles, labels, **LEGEND_KW)
+    # Enhance legend appearance
+    for text in legend.get_texts():
+        text.set_fontweight('medium')
+    return legend
+
 def _plot_overlay_per_family(
     models: Dict[str, pd.DataFrame],
     metric: str,
@@ -192,6 +286,7 @@ def _plot_overlay_per_family(
     title_suffix: str = "",
     panel_subset: List[str] = None,
     as_integer_xticks: bool = True,
+    logo_dir: Optional[str] = None,
 ):
     fam_to_models = _collect_by_family(models, metric)
     fams = [f for f, _ in _family_iter() if panel_subset is None or f in panel_subset]
@@ -201,11 +296,11 @@ def _plot_overlay_per_family(
 
     # layout: 1xN (wide) or 2x3 if N==5
     if n == 5:
-        nrows, ncols, figsize = 1, 5, (18, 4.2)
+        nrows, ncols, figsize = 1, 5, (20, 5)
     elif n <= 3:
-        nrows, ncols, figsize = 1, n, (6*n, 4.2)
+        nrows, ncols, figsize = 1, n, (7*n, 5)
     else:
-        nrows, ncols, figsize = 2, math.ceil(n/2), (6*ncols, 8.4)
+        nrows, ncols, figsize = 2, math.ceil(n/2), (7*ncols, 10)
 
     fig, axs = _prep_family_axes(ncols=ncols, nrows=nrows, figsize=figsize)
     axs = axs.flatten()
@@ -214,7 +309,8 @@ def _plot_overlay_per_family(
     for i, fam in enumerate(fams):
         ax = axs[i]
         fam_pretty = FAMILY_PRETTY.get(fam, fam)
-        # gentle band for readability (set per-metric)
+        
+        # Enhanced bands with metric-specific styling
         if metric == "gain":
             _band(ax, 1.0, 1.2)  # light band above unity
             _band(ax, 0.8, 1.0)  # and below
@@ -234,35 +330,63 @@ def _plot_overlay_per_family(
             ys = g.mean().to_numpy(dtype=float)
             es = g.apply(_safe_sem).to_numpy(dtype=float)
 
+            color = COLORS[marker_i % len(COLORS)]
+            marker = MARKERS[marker_i % len(MARKERS)]
+            
+            # Enhanced line and marker styling
             ax.plot(xs, ys,
-                    marker=MARKERS[marker_i % len(MARKERS)],
-                    linewidth=LINEWIDTH, markersize=MS, label=model)
-            ax.fill_between(xs, ys-es, ys+es, alpha=0.18)
+                    marker=marker,
+                    color=color,
+                    linewidth=LINEWIDTH,
+                    markersize=MS,
+                    markeredgewidth=MARKER_EDGE_WIDTH,
+                    markeredgecolor=MARKER_EDGE_COLOR,
+                    label=model,
+                    alpha=0.9,
+                    zorder=10 + marker_i)
+            
+            # Enhanced error bands with gradient
+            ax.fill_between(xs, ys-es, ys+es, 
+                          color=color,
+                          alpha=0.15,
+                          zorder=5 + marker_i,
+                          edgecolor='none')
             marker_i += 1
 
         if hline is not None:
-            ax.axhline(hline, color="k", linestyle="--", linewidth=1, alpha=0.7)
+            ax.axhline(hline, color="#666666", linestyle="--", linewidth=1.5, 
+                      alpha=0.6, zorder=2, label='_nolegend_')
 
-        ax.set_title(fam_pretty)
-        ax.set_xlabel("Frequency (cycles / 64 steps)")
-        ax.set_ylabel(ylabel)
+        # Enhanced title and labels
+        ax.set_title(fam_pretty, pad=10, fontweight='bold')
+        ax.set_xlabel("Frequency (cycles / 64 steps)", fontweight='medium')
+        ax.set_ylabel(ylabel, fontweight='medium')
+        
+        # Clean up axes
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_linewidth(1.2)
+        ax.spines['bottom'].set_linewidth(1.2)
+        
         if ylim:
             ax.set_ylim(*ylim)
         if as_integer_xticks:
             xt = sorted(dfm["frequency_cycles"].dropna().unique()) if dfm is not None else [1,2,4,8,16]
             ax.set_xticks(list(map(int, xt)))
+            ax.tick_params(axis='both', which='major', labelsize=10, width=1.2)
 
-    # global legend
+    # Enhanced global legend
     handles, labels = axs[0].get_legend_handles_labels()
     if len(handles):
-        fig.legend(handles, labels, **LEGEND_KW)
+        _create_legend_with_logos(fig, handles, labels, logo_dir)
 
     if title_suffix:
-        fig.suptitle(title_suffix, y=1.02, fontsize=18)
+        fig.suptitle(title_suffix, y=1.02, fontsize=16, fontweight='bold')
+    
     plt.tight_layout()
     if out_path:
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        plt.savefig(out_path, bbox_inches="tight")
+        plt.savefig(out_path, bbox_inches="tight", facecolor='white', edgecolor='none')
     plt.close(fig)
 
 # --------------------------- Appendix helpers ---------------------------
@@ -289,28 +413,55 @@ def _midband_table(models: Dict[str, pd.DataFrame], out_path: str):
     tb = tb.pivot(index="Family", columns="Model", values="|G-1| (mid)").round(3).sort_index()
     tb2 = pd.DataFrame(rows).pivot(index="Family", columns="Model", values="|Phase| deg (mid)").round(2).sort_index()
 
-    # render two small tables stacked
-    fig, axs = plt.subplots(2, 1, figsize=(min(12, 4 + 1.1*len(tb.columns)), 5.6))
+    # Enhanced table rendering
+    fig, axs = plt.subplots(2, 1, figsize=(min(14, 5 + 1.2*len(tb.columns)), 6.5))
+    fig.patch.set_facecolor('white')
+    
     for ax, title, data in zip(
         axs,
-        ["Mean |G-1| (Freqs 4 & 8)", "Mean |Phase| (deg) (Freqs 4 & 8)"],
+        ["Mean |G-1| (Frequencies 4 & 8)", "Mean |Phase| (degrees) (Frequencies 4 & 8)"],
         [tb, tb2]
     ):
         ax.axis("off")
+        
+        # Create table with enhanced styling
+        cell_colors = []
+        for _ in range(len(data.index)):
+            row_colors = []
+            for _ in range(len(data.columns)):
+                row_colors.append('#f9f9f9')
+            cell_colors.append(row_colors)
+        
         tbl = ax.table(cellText=data.values,
                        rowLabels=data.index,
                        colLabels=data.columns,
                        cellLoc="center",
-                       loc="center")
-        tbl.scale(1.1, 1.2)
-        ax.set_title(title, pad=10)
+                       loc="center",
+                       cellColours=cell_colors,
+                       colColours=['#e8e8e8'] * len(data.columns),
+                       rowColours=['#e8e8e8'] * len(data.index))
+        
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(10)
+        tbl.scale(1.2, 1.5)
+        
+        # Style the table
+        for (i, j), cell in tbl.get_celld().items():
+            cell.set_edgecolor('#cccccc')
+            cell.set_linewidth(0.5)
+            if i == 0 or j == -1:
+                cell.set_text_props(weight='bold')
+                cell.set_facecolor('#e0e0e0')
+        
+        ax.set_title(title, pad=15, fontsize=13, fontweight='bold')
+    
     plt.tight_layout()
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    plt.savefig(out_path, bbox_inches="tight")
+    plt.savefig(out_path, bbox_inches="tight", facecolor='white', edgecolor='none')
     plt.close(fig)
 
 def _compliance_panels(models: Dict[str, pd.DataFrame], out_path: str):
-    # bar per family with grouped models
+    # Enhanced bar chart styling
     fams = [f for f, _ in _family_iter()]
     model_list = sorted(models.keys())
     vals = np.full((len(fams), len(model_list)), np.nan)
@@ -324,35 +475,51 @@ def _compliance_panels(models: Dict[str, pd.DataFrame], out_path: str):
             if not sub.empty:
                 vals[i, j] = sub.mean()
 
-    fig, axs = plt.subplots(1, len(fams), figsize=(18, 4.2), sharey=True)
+    fig, axs = plt.subplots(1, len(fams), figsize=(20, 5), sharey=True)
+    fig.patch.set_facecolor('white')
+    
     if len(fams) == 1:
         axs = [axs]
     x = np.arange(len(model_list))
-    width = 0.8 / len(fams)
 
     for i, (fam, ax) in enumerate(zip(fams, axs)):
         for j, model in enumerate(model_list):
             v = vals[i, j]
             if not np.isfinite(v):
                 continue
-            ax.bar(j, v, width=0.8, label=None)
-        ax.set_title(FAMILY_PRETTY.get(fam, fam))
+            color = COLORS[j % len(COLORS)]
+            ax.bar(j, v, width=0.7, color=color, alpha=0.8, 
+                  edgecolor='white', linewidth=2)
+        
+        ax.set_title(FAMILY_PRETTY.get(fam, fam), fontweight='bold', pad=10)
         ax.set_xticks(x)
-        ax.set_xticklabels(model_list, rotation=30, ha="right")
-        ax.set_ylim(0, 1.02)
-        ax.set_ylabel("Compliance")
+        ax.set_xticklabels(model_list, rotation=35, ha="right", fontweight='medium')
+        ax.set_ylim(0, 1.05)
+        ax.set_ylabel("Compliance Rate", fontweight='medium')
+        
+        # Clean up axes
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.grid(True, alpha=0.2, axis='y')
+        
+        # Add percentage labels on bars
+        for j, model in enumerate(model_list):
+            v = vals[i, j]
+            if np.isfinite(v):
+                ax.text(j, v + 0.02, f'{v:.1%}', ha='center', va='bottom', 
+                       fontsize=9, fontweight='medium')
 
-    # single legend would be redundant; bars already labeled by xticks
     plt.tight_layout()
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    plt.savefig(out_path, bbox_inches="tight")
+    plt.savefig(out_path, bbox_inches="tight", facecolor='white', edgecolor='none')
     plt.close(fig)
 
-def _overlay_metric(models: Dict[str, pd.DataFrame], metric: str, ylabel: str, out_path: str, hline=None, ylim=None):
+def _overlay_metric(models: Dict[str, pd.DataFrame], metric: str, ylabel: str, out_path: str, 
+                   hline=None, ylim=None, logo_dir=None):
     _plot_overlay_per_family(
         models=models, metric=metric, ylabel=ylabel,
         hline=hline, ylim=ylim, out_path=out_path,
-        title_suffix="", panel_subset=None
+        title_suffix="", panel_subset=None, logo_dir=logo_dir
     )
 
 # ------------------------------- Entry --------------------------------
@@ -362,6 +529,7 @@ def main():
     ap = argparse.ArgumentParser(description="Make paper-ready overlay plots from MathBode summaries.")
     ap.add_argument("--summaries_dir", required=True, help="Folder with summary_*.csv/.parquet for each model.")
     ap.add_argument("--outdir", required=True, help="Output directory root.")
+    ap.add_argument("--logo_dir", default=None, help="Optional directory containing model provider logos.")
     args = ap.parse_args()
 
     models = load_summaries(args.summaries_dir)
@@ -384,6 +552,7 @@ def main():
         ylim=None,
         out_path=os.path.join(out_main, "fig1_gain_vs_frequency.png"),
         title_suffix="Gain vs Frequency",
+        logo_dir=args.logo_dir,
     )
 
     # 2) Phase Error vs Frequency (only diagnostic families)
@@ -396,6 +565,7 @@ def main():
         out_path=os.path.join(out_main, "fig2_phase_error_exponential_and_system.png"),
         title_suffix="Phase Error vs Frequency",
         panel_subset=["exponential_interest", "linear_system"],
+        logo_dir=args.logo_dir,
     )
 
     # 3) R² vs Frequency (all families)
@@ -408,6 +578,7 @@ def main():
             ylim=(0.0, 1.02),
             out_path=os.path.join(out_main, "fig3_r2_vs_frequency.png"),
             title_suffix="Fit Quality vs Frequency",
+            logo_dir=args.logo_dir,
         )
 
     # ------------------ APPENDIX ------------------
@@ -424,13 +595,19 @@ def main():
         # ensure unified column name
         models_h = {m: (d.rename(columns={"h2_over_h1_model": "h2_over_h1"}) if "h2_over_h1_model" in d.columns else d)
                     for m, d in models.items()}
-        _overlay_metric(models_h, "h2_over_h1", "H2 / H1", os.path.join(out_appx, "figA3_h2_over_h1_vs_frequency.png"))
+        _overlay_metric(models_h, "h2_over_h1", "H2 / H1", 
+                       os.path.join(out_appx, "figA3_h2_over_h1_vs_frequency.png"),
+                       logo_dir=args.logo_dir)
 
     # A4) Residual diagnostics
     if any("res_rms_norm" in df.columns for df in models.values()):
-        _overlay_metric(models, "res_rms_norm", "Residual RMS (normalized)", os.path.join(out_appx, "figA4_residual_rms.png"))
+        _overlay_metric(models, "res_rms_norm", "Residual RMS (normalized)", 
+                       os.path.join(out_appx, "figA4_residual_rms.png"),
+                       logo_dir=args.logo_dir)
     if any("res_acf1" in df.columns for df in models.values()):
-        _overlay_metric(models, "res_acf1", "Residual ACF(1)", os.path.join(out_appx, "figA5_residual_acf1.png"))
+        _overlay_metric(models, "res_acf1", "Residual ACF(1)", 
+                       os.path.join(out_appx, "figA5_residual_acf1.png"),
+                       logo_dir=args.logo_dir)
 
     # A6) (Optional) Geometry standalone: Gain & R² for Similar Triangles only
     # Gain
@@ -442,6 +619,7 @@ def main():
         out_path=os.path.join(out_appx, "figA6_geometry_gain.png"),
         title_suffix="Similar Triangles • Gain",
         panel_subset=["similar_triangles"],
+        logo_dir=args.logo_dir,
     )
     # R²
     if any("r2_model" in df.columns for df in models.values()):
@@ -454,10 +632,12 @@ def main():
             out_path=os.path.join(out_appx, "figA6_geometry_r2.png"),
             title_suffix="Similar Triangles • Fit Quality",
             panel_subset=["similar_triangles"],
+            logo_dir=args.logo_dir,
         )
 
-    print(f"[OK] Wrote main figures → {out_main}")
-    print(f"[OK] Wrote appendix figures/tables → {out_appx}")
+    print(f"✨ [OK] Wrote main figures → {out_main}")
+    print(f"✨ [OK] Wrote appendix figures/tables → {out_appx}")
 
 if __name__ == "__main__":
     main()
+    
