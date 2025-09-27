@@ -79,19 +79,22 @@ MARKER_EDGE_COLOR = "white"
 
 # Enhanced legend styling with gradient background
 LEGEND_KW = dict(
+    # Keep it centered, but give it an 80% wide anchor box:
+    # (left=0.10, y=-0.14, width=0.80, height ignored)
     loc="upper center",
-    bbox_to_anchor=(0.5, -0.12),
+    bbox_to_anchor=(0.10, -0.14, 0.80, 0.0),
+    mode="expand",          # spread entries to fill the anchor box width
     ncol=3,
     frameon=True,
     fancybox=True,
     shadow=False,
     borderpad=1.2,
-    columnspacing=2.5,
-    handlelength=2.8,
+    columnspacing=2.8,
+    handlelength=3.0,
     facecolor="white",
     edgecolor="none",
     framealpha=1.0,
-    borderaxespad=0.5,
+    borderaxespad=0.6,
 )
 
 # Gradient background colors
@@ -252,7 +255,7 @@ def _create_premium_legend(fig, handles, labels):
     # Style the legend text
     for text in legend.get_texts():
         text.set_fontweight(500)
-        text.set_fontsize(11)
+        text.set_fontsize(27)
     
     # Add subtle shadow to legend box
     legend.get_frame().set_linewidth(0)
