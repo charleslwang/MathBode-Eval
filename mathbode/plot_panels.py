@@ -255,7 +255,7 @@ def _create_premium_legend(fig, handles, labels):
     # Style the legend text
     for text in legend.get_texts():
         text.set_fontweight(500)
-        text.set_fontsize(27)
+        text.set_fontsize(15)
     
     # Add subtle shadow to legend box
     legend.get_frame().set_linewidth(0)
