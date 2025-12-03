@@ -253,7 +253,7 @@ If you use **MathBode-Eval** in your research, please cite:
 
 ```bibtex
 @misc{wang2025mathbodeeval,
-  title         = {MathBode-Eval: Dynamic Fingerprints of LLM Mathematical Reasoning},
+  title         = {MathBode: Measuring the Stability of LLM Reasoning using Frequency Response},
   author        = {Charles L. Wang},
   year          = {2025},
   eprint        = {2509.23143},
